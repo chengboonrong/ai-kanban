@@ -403,7 +403,7 @@ test('refineInOrca shows the run in an Orca terminal in the checkout, tailed by 
   // The terminal's command ends by itself once the log is gone, so a close that never comes leaves no tail running.
   mkdirSync(path.dirname(file));
   writeFileSync(file, '');
-  const shell = spawn('/bin/zsh', ['-c', command], { stdio: 'ignore' });
+  const shell = spawn('/bin/sh', ['-c', command], { stdio: 'ignore' });
   await sleep(300);
   rmSync(path.dirname(file), { recursive: true });
   const code = await Promise.race([new Promise((r) => shell.on('exit', r)), sleep(4000).then(() => 'still running')]);
