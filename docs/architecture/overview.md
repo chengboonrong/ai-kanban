@@ -41,13 +41,13 @@ The most important decision is to separate **project management** from **AI reas
 | Local cache | Drift / SQLite on native; supported web storage | Offline task drafts and cached views |
 | Backend | TypeScript + Fastify | Auth, tasks, workspaces, boards, API |
 | Database | PostgreSQL | Canonical application data |
-| Queue | BullMQ + Redis | Durable queued work and retries |
+| Queue | PostgreSQL (`FOR UPDATE SKIP LOCKED`); BullMQ + Redis when volume needs it | Durable queued work and retries |
 | AI control plane | TypeScript | Agent routing and job orchestration |
 | Local worker | TypeScript first (Rust later, if justified) | Process supervision and agent execution |
 | Remote worker | Containerized runtime | Remote repository analysis and agent jobs |
 | Agent interfaces | Adapter-based CLI/API integration | Codex, Claude Code, OpenCode |
 | GitHub | GitHub App + REST/GraphQL + webhooks | Repo access, issues and PR sync |
-| Live events | SSE initially | Job progress and board updates |
+| Live events | Long-polling for run progress (Dio can't stream responses on web); SSE for board-wide updates later | Job progress and board updates |
 | Telemetry | OpenTelemetry | Logs, metrics and tracing |
 
 **Worker language:** Flutter stays responsible for presentation. The worker runs headlessly so a closed Flutter window doesn't kill a user-approved job. Start the worker in **TypeScript** (OpenCode's SDK is TypeScript-native, and orchestration code can be shared); move to Rust only when native process supervision or cross-platform packaging justifies it.
@@ -72,7 +72,7 @@ Agents are **read-only**. They read the repository and write specs; they never e
 | Agent harness | OpenCode |
 | AI provider | OpenCode Zen free models (default); DeepSeek API with the user's own key (optional) |
 | Default model | `opencode/deepseek-v4.1-flash-free` |
-| Free fallback | `opencode/glm-5.3-flash-free` |
+| Free fallback | None by default: OpenCode withdrew `glm-5.3-flash-free` (November 2026); add one in the worker's `models` |
 | Paid models (opt-in) | `deepseek-flash` (V4.1 Flash), `deepseek-v4-pro` via the DeepSeek API |
 | Execution | Local / Remote / Auto |
 | Integration | OpenCode SDK |
@@ -129,6 +129,8 @@ agent_run
 ```
 
 One OpenCode agent policy, the **Refiner**: read-only repository access (read, list, search); returns structured requirements, acceptance criteria, evidence citations, ambiguities and a suggested approach. File edits, shell commands and Git writes are denied.
+
+As built (Milestone 3): the Refiner's permissions deny everything except `read`, `list`, `glob` and `grep`, and `external_directory` is denied, so it can't read outside the folder it is given; nothing is set to `ask`, which would hang a headless run. The worker starts OpenCode with `OPENCODE_DISABLE_PROJECT_CONFIG`, `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_EXTERNAL_SKILLS` and `OPENCODE_PURE`, so the repository's own `opencode.json`, `AGENTS.md`, `CLAUDE.md`, skills and plugins never load, and with a private `XDG_CONFIG_HOME`, so the machine owner's personal OpenCode setup (MCP servers, plugins, instructions) doesn't reach the Refiner either. Provider sign-ins still come from OpenCode's data directory. What the Refiner can see: the worker extracts the checkout's current commit (`git archive` from a shared clone, with no filter drivers configured) into a temporary folder and runs the agent there, so it reads committed files only, as on GitHub: git-crypt files stay encrypted and LFS files stay pointers. Untracked and ignored files (`.env`, `.npmrc`, build output), `.git` and uncommitted changes are never in that folder; the run reports the commit and whether uncommitted changes were left out. The worker refuses a commit containing symlinks that point outside it. Connecting a repository to a board shares your checkout of it with that board: runs there are claimed only by workers of whoever connected it, so another member can't point a board at your repository and have your worker read it for them. If that person leaves the workspace, the board's runs wait until someone connects the repository again. The structured output schema is `packages/contracts/refined-spec.schema.json`; the API validates every spec against it again, and the worker marks each evidence citation verified only if those lines exist in the exported commit.
 
 Keep provider credentials (OpenCode Zen, DeepSeek) on the executing worker or behind a controlled inference gateway. **Never embed API secrets in Flutter builds.**
 
@@ -209,7 +211,7 @@ agent:
   default_harness: opencode
   provider: opencode
   model: opencode/deepseek-v4.1-flash-free
-  fallback_models: [opencode/glm-5.3-flash-free]
+  fallback_models: []
 
 execution:
   default_target: auto

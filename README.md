@@ -24,8 +24,8 @@ The core design choice is keeping two things apart:
 
 ## Preview
 
-What milestones 1–2 deliver so far: the board, quick capture and task history, here on macOS against the local API.
-AI refinement and GitHub sync are not built yet.
+What milestones 1–2 deliver: the board, quick capture and task history, here on macOS against the local API.
+Milestone 3 adds AI refinement with a local worker (below; not in the demo yet). GitHub sync is not built yet.
 
 ![Demo: sign in, create a workspace and board, capture three tasks, drag one to In Progress, open its history](docs/media/demo.gif)
 
@@ -70,7 +70,7 @@ All three are one Flutter app with adaptive layouts.
 | Part | Choice |
 | --- | --- |
 | Client | Flutter, Riverpod, GoRouter, Dio, Drift |
-| Backend | TypeScript, Fastify, PostgreSQL, BullMQ on Redis |
+| Backend | TypeScript, Fastify, PostgreSQL (also the job queue for now) |
 | Workers | TypeScript daemon (local) and containers (cloud), same read-only agent contract |
 | Agents | OpenCode SDK; OpenCode's free DeepSeek V4.1 Flash by default, paid DeepSeek API optional |
 | GitHub | GitHub App, REST/GraphQL, webhooks |
@@ -97,8 +97,32 @@ npm run dev                                  # API on http://localhost:8080, mig
 
 cd apps/flutter_app
 fvm flutter run -d macos                     # or: -d chrome
-fvm flutter test integration_test/board_flow_test.dart -d macos   # end-to-end flow against the running API
+fvm flutter test integration_test/board_flow_test.dart -d macos        # end-to-end flow against the running API
+fvm flutter test integration_test/refinement_flow_test.dart -d macos   # refinement UI, with the test playing the worker
 ```
+
+### Refining tasks with a local worker
+
+The worker reads repositories already checked out on your machine and needs the `opencode` CLI installed. It uses
+OpenCode's free `opencode/deepseek-v4.1-flash-free` (add fallbacks to `models` in `worker.json`; `opencode models
+opencode` lists what's available); repository code is sent to that provider. The free tier has a usage limit: once it's used up, runs fail with "Free limit reached"
+until it resets, or you set paid models in `worker.json`.
+
+```sh
+cd services/worker
+npm install
+npm test
+npm run register -- --login <your-login>        # dev sign-in; saves a worker token to ~/.config/ai-kanban/worker.json
+npm run allow -- owner/name ~/code/name         # each repository this worker may read (it checks the git remote)
+npm start                                       # polls the API and refines queued cards
+```
+
+In the app, connect the board to the same `owner/name` (the link icon on the board). Every new card on that board is
+then refined, by your worker, including cards teammates add (connecting a repository shares your checkout of it with
+that board). The task page shows the run live and the resulting spec, which you can approve or refine again. The
+agent reads a copy of the checkout's current commit, so untracked files such as `.env`, `.git` and uncommitted changes
+never reach it. It can only read, list, glob and grep there, and ignores the repository's own OpenCode config,
+`AGENTS.md` and plugins, as well as your personal OpenCode setup. Models are set in `worker.json`.
 
 To regenerate the screenshots and demo in `docs/media`, keep the API running and run
 `apps/flutter_app/tool/readme_media.sh` (macOS; drives the app with a `demo` account and needs ffmpeg).
