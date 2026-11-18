@@ -22,6 +22,32 @@ The core design choice is keeping two things apart:
 - **Project management**: boards, tasks, approvals. Lives in the central backend, independent of any client.
 - **AI reasoning**: refining a brief into a spec. Runs on a worker with read-only repository access.
 
+## Preview
+
+What milestones 1–2 deliver: the board, quick capture and task history, here on macOS against the local API.
+Milestone 3 adds AI refinement with a local worker (screenshots further down). GitHub sync is not built yet.
+
+![Demo: sign in, create a workspace and board, capture three tasks, drag one to In Progress, open its history](docs/media/demo.gif)
+
+[Watch the demo as MP4](docs/media/demo.mp4)
+
+| Board | Task with its history | Phone width |
+| --- | --- | --- |
+| <img src="docs/media/board.png" alt="Board with Backlog, Todo, In Progress and Done columns" width="380"> | <img src="docs/media/task-detail.png" alt="Task page with title, column, description and an activity list" width="380"> | <img src="docs/media/board-phone.png" alt="The same board at phone width, one column at a time" width="150"> |
+
+### AI refinement (Milestone 3)
+
+A board connected to a repository, with cards in each refinement state, and the task page following a run and
+showing its spec. The run progress and spec here are sample data posted by a test worker, not real model output.
+
+| Board with refinement status | Run in progress | Spec ready for review |
+| --- | --- | --- |
+| <img src="docs/media/refine-board.png" alt="Board linked to acme/mobile-app; cards show Waiting for a worker, Refining, Spec ready for review, Spec approved and Refinement failed" width="380"> | <img src="docs/media/refine-running.png" alt="Task page with a progress bar, a Cancel button and the agent's latest reads and searches" width="380"> | <img src="docs/media/refine-spec.png" alt="Spec with title, version and commit, summary, readiness 72% and acceptance criteria" width="380"> |
+
+| Evidence and approval | Failed run | Spec at phone width |
+| --- | --- | --- |
+| <img src="docs/media/refine-evidence.png" alt="Requirements, open questions, suggested approach, evidence lines with verified and unverified marks, and an Approve spec button" width="380"> | <img src="docs/media/refine-failed.png" alt="The last refinement failed, with the error and a Refine with AI button" width="380"> | <img src="docs/media/refine-spec-phone.png" alt="The spec view at phone width" width="150"> |
+
 ## Surfaces
 
 | Surface | Role |
@@ -57,9 +83,9 @@ All three are one Flutter app with adaptive layouts.
 | Part | Choice |
 | --- | --- |
 | Client | Flutter, Riverpod, GoRouter, Dio, Drift |
-| Backend | TypeScript, Fastify, PostgreSQL, BullMQ on Redis |
+| Backend | TypeScript, Fastify, PostgreSQL (also the job queue for now) |
 | Workers | TypeScript daemon (local) and containers (cloud), same read-only agent contract |
-| Agents | OpenCode SDK; DeepSeek Flash by default |
+| Agents | OpenCode SDK; OpenCode's free DeepSeek V4.1 Flash by default, paid DeepSeek API optional |
 | GitHub | GitHub App, REST/GraphQL, webhooks |
 | Telemetry | OpenTelemetry |
 
@@ -69,3 +95,55 @@ Early build. Milestones: foundation → Kanban core → OpenCode + DeepSeek refi
 hardening. The first release targets macOS desktop and web.
 
 Architecture: [docs/architecture/overview.md](docs/architecture/overview.md)
+
+## Local development
+
+Requires Docker, Node 24+ and Flutter via fvm (`apps/flutter_app/.fvmrc` pins the version).
+
+```sh
+docker compose up -d --wait                  # Postgres on localhost:55432 (dev db `kanban`, test db `kanban_test`)
+
+cd services/api
+npm install
+npm test                                     # API tests against kanban_test
+npm run dev                                  # API on http://localhost:8080, migrations run on start
+
+cd apps/flutter_app
+fvm flutter run -d macos                     # or: -d chrome
+fvm flutter test integration_test/board_flow_test.dart -d macos        # end-to-end flow against the running API
+fvm flutter test integration_test/refinement_flow_test.dart -d macos   # refinement UI, with the test playing the worker
+```
+
+`apps/flutter_app/tool/acceptance.sh` runs both end-to-end flows in one go (macOS): it starts Postgres, reuses an API
+already on `:8080` (started with `npm run dev`) or starts one for the run, then drives the app. It's local only; CI runs lint (`npm run lint` at the
+repo root), `dart format`, the analyzer, and the unit and API tests.
+
+### Refining tasks with a local worker
+
+The worker reads repositories already checked out on your machine and needs the `opencode` CLI installed. It uses
+OpenCode's free `opencode/deepseek-v4.1-flash-free` (add fallbacks to `models` in `worker.json`; `opencode models
+opencode` lists what's available); repository code is sent to that provider. The free tier has a usage limit: once it's used up, runs fail with "Free limit reached"
+until it resets, or you set paid models in `worker.json`.
+
+```sh
+cd services/worker
+npm install
+npm test
+npm run register -- --login <your-login>        # dev sign-in; saves a worker token to ~/.config/ai-kanban/worker.json
+npm run allow -- owner/name ~/code/name         # each repository this worker may read (it checks the git remote)
+npm start                                       # polls the API and refines queued cards
+```
+
+In the app, connect the board to the same `owner/name` (the link icon on the board). Every new card on that board is
+then refined, by your worker, including cards teammates add (connecting a repository shares your checkout of it with
+that board). The task page shows the run live and the resulting spec, which you can approve or refine again. The
+agent reads a copy of the checkout's current commit, so untracked files such as `.env`, `.git` and uncommitted changes
+never reach it. It can only read, list, glob and grep there, and ignores the repository's own OpenCode config,
+`AGENTS.md` and plugins, as well as your personal OpenCode setup. Models are set in `worker.json`.
+
+To regenerate the screenshots and demo in `docs/media`, keep the API running and run
+`apps/flutter_app/tool/readme_media.sh` (macOS; drives the app with a `demo` account and needs ffmpeg).
+
+`npm run dev` starts the API with `AUTH_MODE=dev`: passwordless sign-in by login name, loopback only, refused when
+`NODE_ENV=production`. Real sign-in via GitHub replaces it. The app reaches the API at `http://localhost:8080`; override
+with `--dart-define=API_URL=...` (an Android emulator needs `http://10.0.2.2:8080`). The Flutter build contains no secrets.

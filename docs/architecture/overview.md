@@ -41,13 +41,13 @@ The most important decision is to separate **project management** from **AI reas
 | Local cache | Drift / SQLite on native; supported web storage | Offline task drafts and cached views |
 | Backend | TypeScript + Fastify | Auth, tasks, workspaces, boards, API |
 | Database | PostgreSQL | Canonical application data |
-| Queue | BullMQ + Redis | Durable queued work and retries |
+| Queue | PostgreSQL (`FOR UPDATE SKIP LOCKED`); BullMQ + Redis when volume needs it | Durable queued work and retries |
 | AI control plane | TypeScript | Agent routing and job orchestration |
 | Local worker | TypeScript first (Rust later, if justified) | Process supervision and agent execution |
 | Remote worker | Containerized runtime | Remote repository analysis and agent jobs |
 | Agent interfaces | Adapter-based CLI/API integration | Codex, Claude Code, OpenCode |
 | GitHub | GitHub App + REST/GraphQL + webhooks | Repo access, issues and PR sync |
-| Live events | SSE initially | Job progress and board updates |
+| Live events | Long-polling for run progress (Dio can't stream responses on web); SSE for board-wide updates later | Job progress and board updates |
 | Telemetry | OpenTelemetry | Logs, metrics and tracing |
 
 **Worker language:** Flutter stays responsible for presentation. The worker runs headlessly so a closed Flutter window doesn't kill a user-approved job. Start the worker in **TypeScript** (OpenCode's SDK is TypeScript-native, and orchestration code can be shared); move to Rust only when native process supervision or cross-platform packaging justifies it.
@@ -70,24 +70,29 @@ Agents are **read-only**. They read the repository and write specs; they never e
 | Setting | Value |
 | --- | --- |
 | Agent harness | OpenCode |
-| AI provider | DeepSeek API |
-| Default model | `deepseek-flash` (V4.1 Flash) — verify against current DeepSeek docs |
-| Advanced model | `deepseek-v4-pro` (optional) |
+| AI provider | OpenCode Zen free models (default); DeepSeek API with the user's own key (optional) |
+| Default model | `opencode/deepseek-v4.1-flash-free` |
+| Free fallback | None by default: OpenCode withdrew `glm-5.3-flash-free` (November 2026); add one in the worker's `models` |
+| Paid models (opt-in) | `deepseek-flash` (V4.1 Flash), `deepseek-v4-pro` via the DeepSeek API |
 | Execution | Local / Remote / Auto |
 | Integration | OpenCode SDK |
+
+Free models by default, so a new user can run refinement without buying API credits. Both free defaults come from providers that, per OpenCode's Zen docs (checked 2026-11-18), keep no data and don't train on it. Repository code goes to the model, so don't make a free model that retains data or trains on it (e.g. `big-pickle`, `iceman-free`) a default. Zen says free models are available "for a limited time": the model id is configuration, and the worker must fall back, or fail with a clear message, when a model is withdrawn. Free-tier chat models are only served through OpenCode itself, which suits this design. Whether a worker needs an OpenCode Zen sign-in for free models is still unverified (the dev machine already had a Zen credential).
+
+DeepSeek API ids, checked against DeepSeek's pricing page on 2026-11-18: `deepseek-flash` → DeepSeek-V4.1-Flash-1017 and `deepseek-v4-pro` → DeepSeek-V4-Pro-0813.
 
 Avoid the legacy `deepseek-chat` / `deepseek-reasoner` identifiers (scheduled for discontinuation July 2026). OpenCode's official TypeScript SDK embeds its server, creates sessions, issues prompts and subscribes to events — use it rather than scraping CLI output.
 
 ### Worker topology
 
-The **agent orchestrator** assigns jobs, enforces policy and manages leases. Both the **local worker** (desktop, local checkout) and **cloud worker** (container, isolated clone) run the OpenCode SDK against the **DeepSeek API** with per-workspace credentials and budgets.
+The **agent orchestrator** assigns jobs, enforces policy and manages leases. Both the **local worker** (desktop, local checkout) and **cloud worker** (container, isolated clone) run the OpenCode SDK against **OpenCode's free models** by default, or the **DeepSeek API** with per-workspace credentials and budgets.
 
 ### Local vs remote
 
 | Capability | Local worker | Remote worker |
 | --- | --- | --- |
 | OpenCode harness | Yes | Yes |
-| Default DeepSeek model | Yes | Yes |
+| Default model | Yes | Yes |
 | Analyze repository (read-only) | Local checkout | Isolated clone |
 | Survive Flutter UI closing | Yes, if daemon keeps running | Yes |
 | Work while computer is off | No | Yes |
@@ -117,7 +122,7 @@ An agent run persists:
 ```
 agent_run
   id, task_id, execution_target, worker_id
-  harness = "opencode", provider = "deepseek", model = "deepseek-flash"
+  harness = "opencode", provider = "opencode", model = "opencode/deepseek-v4.1-flash-free"
   session_id, repository_commit_sha, state
   started_at, completed_at
   token_usage, cost, artifact_refs, error_details
@@ -125,7 +130,9 @@ agent_run
 
 One OpenCode agent policy, the **Refiner**: read-only repository access (read, list, search); returns structured requirements, acceptance criteria, evidence citations, ambiguities and a suggested approach. File edits, shell commands and Git writes are denied.
 
-Keep DeepSeek credentials on the executing worker or behind a controlled inference gateway. **Never embed API secrets in Flutter builds.**
+As built (Milestone 3): the Refiner's permissions deny everything except `read`, `list`, `glob` and `grep`, and `external_directory` is denied, so it can't read outside the folder it is given; nothing is set to `ask`, which would hang a headless run. The worker starts OpenCode with `OPENCODE_DISABLE_PROJECT_CONFIG`, `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_EXTERNAL_SKILLS` and `OPENCODE_PURE`, so the repository's own `opencode.json`, `AGENTS.md`, `CLAUDE.md`, skills and plugins never load, and with a private `XDG_CONFIG_HOME`, so the machine owner's personal OpenCode setup (MCP servers, plugins, instructions) doesn't reach the Refiner either. Provider sign-ins still come from OpenCode's data directory. What the Refiner can see: the worker extracts the checkout's current commit (`git archive` from a shared clone, with no filter drivers configured) into a temporary folder and runs the agent there, so it reads committed files only, as on GitHub: git-crypt files stay encrypted and LFS files stay pointers. Untracked and ignored files (`.env`, `.npmrc`, build output), `.git` and uncommitted changes are never in that folder; the run reports the commit and whether uncommitted changes were left out. The worker refuses a commit containing symlinks that point outside it. Connecting a repository to a board shares your checkout of it with that board: runs there are claimed only by workers of whoever connected it, so another member can't point a board at your repository and have your worker read it for them. If that person leaves the workspace, the board's runs wait until someone connects the repository again. The structured output schema is `packages/contracts/refined-spec.schema.json`; the API validates every spec against it again, and the worker marks each evidence citation verified only if those lines exist in the exported commit.
+
+Keep provider credentials (OpenCode Zen, DeepSeek) on the executing worker or behind a controlled inference gateway. **Never embed API secrets in Flutter builds.**
 
 ## 6. Repository and GitHub synchronization
 
@@ -175,10 +182,10 @@ The desktop Flutter app registers and talks to the worker over loopback or authe
 
 ## 8. MVP roadmap
 
-1. **Foundation** — Flutter desktop/web/mobile shell, auth, PostgreSQL backend, workspace and board creation, GitHub App installation.
+1. **Foundation** — Flutter desktop/web/mobile shell, auth, PostgreSQL backend, workspace and board creation.
 2. **Kanban core** — create/edit tasks, configurable columns, activity history, local task caching, adaptive layouts.
-3. **OpenCode + DeepSeek** — worker registration, repo inspection, AI refinement, structured outputs, streaming run events, approval screen.
-4. **GitHub sync** — issue creation, idempotency, webhook ingestion, PR tracking, review and CI status.
+3. **OpenCode + DeepSeek** — worker registration, repo inspection of a local checkout, AI refinement, structured outputs, streaming run events, approval screen.
+4. **GitHub sync** — GitHub App installation, issue creation, idempotency, webhook ingestion, PR tracking, review and CI status.
 5. **Hybrid workers** — persistent local worker, remote container worker, leases, cancellation, retry rules, execution target selection.
 6. **Hardening & release** — permissions, read-only enforcement, failure recovery, reconciliation, package signing, tests, end-to-end validation.
 
@@ -197,13 +204,14 @@ First usable release: **macOS desktop + web**, with iOS/Android targets kept in 
 
 ## 9. Default application configuration
 
-Application-level config (not an OpenCode-native file). Configure DeepSeek in OpenCode via its auth flow, per DeepSeek's OpenCode integration guide: https://api-docs.deepseek.com/quick_start/agent_integrations/opencode/
+Application-level config (not an OpenCode-native file). Free models need no DeepSeek setup. To opt into paid DeepSeek models, configure DeepSeek in OpenCode via its auth flow, per DeepSeek's OpenCode integration guide: https://api-docs.deepseek.com/quick_start/agent_integrations/opencode/
 
 ```yaml
 agent:
   default_harness: opencode
-  provider: deepseek
-  model: deepseek-flash
+  provider: opencode
+  model: opencode/deepseek-v4.1-flash-free
+  fallback_models: []
 
 execution:
   default_target: auto
@@ -217,4 +225,4 @@ refinement:
   repository_access: read_only
 ```
 
-**Decision:** Flutter client, TypeScript backend and worker services, OpenCode as the sole default harness, DeepSeek Flash as the default model. Local and cloud workers run the same read-only agent contract.
+**Decision:** Flutter client, TypeScript backend and worker services, OpenCode as the sole default harness, OpenCode's free DeepSeek V4.1 Flash as the default model (paid DeepSeek API optional). Local and cloud workers run the same read-only agent contract.
