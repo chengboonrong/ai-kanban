@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api.dart';
 import '../../core/models.dart';
+import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../boards/board_page.dart';
 
@@ -31,46 +32,58 @@ Future<void> _open(BuildContext context, String url) async {
   }
 }
 
-/// Icon, text (also what a screen reader hears) and colour of one status.
-typedef _Look = (IconData, String, Color);
+/// How a status reads: neutral and quiet tags sit on paper3, the rest carry their state.
+enum StatusTone { neutral, quiet, active, good, bad }
 
-/// Success, waiting and problem colours, readable on light and dark surfaces.
-(Color, Color, Color) _palette(BuildContext context) {
-  final dark = Theme.of(context).brightness == Brightness.dark;
-  return (
-    dark ? Colors.green.shade300 : Colors.green.shade800,
-    dark ? Colors.orange.shade300 : Colors.orange.shade900,
-    Theme.of(context).colorScheme.error,
-  );
-}
-
-_Look? _ciLook(String? ci, BuildContext context) {
-  final (good, waiting, bad) = _palette(context);
-  return switch (ci) {
-    'success' => (Icons.check_circle_outline, 'CI passing', good),
-    'failure' => (Icons.cancel_outlined, 'CI failing', bad),
-    'pending' => (Icons.pending_outlined, 'CI running', waiting),
-    _ => null,
+/// Text and ground colours of a [StatusTone].
+(Color, Color) _toneColors(BuildContext context, StatusTone tone) {
+  final t = context.tokens;
+  final error = Theme.of(context).colorScheme.error;
+  return switch (tone) {
+    StatusTone.neutral => (t.ink2, t.paper3),
+    StatusTone.quiet => (t.muted, t.paper3),
+    StatusTone.active => (t.ink, t.accentSoft),
+    StatusTone.good => (t.green, t.greenSoft),
+    StatusTone.bad => (error, error.withValues(alpha: 0.12)),
   };
 }
 
-_Look? _reviewLook(String? review, BuildContext context) {
-  final (good, waiting, bad) = _palette(context);
-  return switch (review) {
-    'approved' => (Icons.thumb_up_outlined, 'Approved', good),
-    'changes_requested' => (
-      Icons.rate_review_outlined,
-      'Changes requested',
-      bad,
-    ),
-    'review_required' => (
-      Icons.visibility_outlined,
-      'Review required',
-      waiting,
-    ),
-    _ => null,
-  };
+/// A small, non-interactive state tag: the state in words, tinted by [tone].
+class StatusChip extends StatelessWidget {
+  const StatusChip({super.key, required this.label, required this.tone});
+  final String label;
+  final StatusTone tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final (fg, bg) = _toneColors(context, tone);
+    return Chip(
+      label: Text(label),
+      labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(color: fg),
+      backgroundColor: bg,
+      side: BorderSide.none,
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+  }
 }
+
+/// Text (also what a screen reader hears) and tone of one status.
+typedef _Look = (String, StatusTone);
+
+_Look? _ciLook(String? ci) => switch (ci) {
+  'success' => ('CI passing', StatusTone.good),
+  'failure' => ('CI failing', StatusTone.bad),
+  'pending' => ('CI running', StatusTone.neutral),
+  _ => null,
+};
+
+_Look? _reviewLook(String? review) => switch (review) {
+  'approved' => ('Approved', StatusTone.good),
+  'changes_requested' => ('Changes requested', StatusTone.bad),
+  'review_required' => ('Review required', StatusTone.neutral),
+  _ => null,
+};
 
 /// The card's small issue/PR badge: issue number, and the PR count coloured by its worst CI or review state.
 class GitHubBadge extends StatelessWidget {
@@ -80,38 +93,50 @@ class GitHubBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final gh = github;
-    final (good, waiting, bad) = _palette(context);
+    final t = context.tokens;
+    final small = Theme.of(context).textTheme.labelSmall ?? const TextStyle();
+    Color colour(StatusTone tone) => switch (tone) {
+      StatusTone.good => t.green,
+      StatusTone.bad => Theme.of(context).colorScheme.error,
+      _ => t.muted,
+    };
     final issue = switch (gh.issueState) {
-      'pending' => (Icons.sync, 'Issue', 'Creating the GitHub issue', null),
+      'pending' => (
+        Icons.sync,
+        'Issue',
+        'Creating the GitHub issue',
+        StatusTone.neutral,
+      ),
       'failed' => (
         Icons.error_outline,
         'Issue',
         'Couldn\'t create the GitHub issue',
-        bad,
+        StatusTone.bad,
       ),
       'open' || 'closed' when gh.issueNumber != null => (
         gh.issueState == 'open' ? Icons.adjust : Icons.check_circle_outline,
         '#${gh.issueNumber}',
         'Issue #${gh.issueNumber}, ${gh.issueState}',
-        null,
+        StatusTone.neutral,
       ),
       _ => null,
     };
-    final prColor = gh.ci == 'failure' || gh.review == 'changes_requested'
-        ? bad
+    // Waiting outranks passing, so a pending CI on an approved PR stays neutral.
+    final prTone = gh.ci == 'failure' || gh.review == 'changes_requested'
+        ? StatusTone.bad
         : gh.ci == 'pending' || gh.review == 'review_required'
-        ? waiting
+        ? StatusTone.neutral
         : gh.ci == 'success' || gh.review == 'approved'
-        ? good
-        : null;
+        ? StatusTone.good
+        : StatusTone.neutral;
     final description = [
       ?issue?.$3,
       if (gh.prs > 0) ...[
         gh.prs == 1
             ? '1 linked pull request'
             : '${gh.prs} linked pull requests',
-        ?_ciLook(gh.ci, context)?.$2,
-        ?_reviewLook(gh.review, context)?.$2,
+        ?_ciLook(gh.ci)?.$1,
+        ?_reviewLook(gh.review)?.$1,
       ],
     ].join(', ');
     if (description.isEmpty) return const SizedBox.shrink();
@@ -122,18 +147,23 @@ class GitHubBadge extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (issue != null) ...[
-              Icon(issue.$1, size: 14, color: issue.$4),
+            if (issue case (final icon, final label, _, final tone)) ...[
+              Icon(icon, size: 14, color: colour(tone)),
               const SizedBox(width: 2),
-              Text(issue.$2, style: TextStyle(color: issue.$4)),
+              Text(
+                label,
+                style: (label.startsWith('#') ? t.mono(small) : small).copyWith(
+                  color: colour(tone),
+                ),
+              ),
               const SizedBox(width: 8),
             ],
             if (gh.prs > 0) ...[
-              Icon(Icons.call_merge, size: 14, color: prColor),
+              Icon(Icons.call_merge, size: 14, color: colour(prTone)),
               const SizedBox(width: 2),
               Text(
                 gh.prs == 1 ? '1 PR' : '${gh.prs} PRs',
-                style: TextStyle(color: prColor),
+                style: small.copyWith(color: colour(prTone)),
               ),
             ],
           ],
@@ -174,97 +204,115 @@ class GitHubPanel extends ConsumerWidget {
     if (!shown) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
+    final t = context.tokens;
     final async = ref.watch(githubProvider(taskId));
     final gh = async.value;
     final issue = gh?.issue;
 
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.code, size: 20),
-                  const SizedBox(width: 8),
-                  Text('GitHub', style: theme.textTheme.titleMedium),
-                ],
-              ),
-              const SizedBox(height: 8),
-              switch (async) {
-                AsyncValue(:final error?) when gh == null => Text(
-                  errorMessage(error),
-                ),
-                _ when gh == null => const LinearProgressIndicator(),
-                _ => Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    switch (issue) {
-                      null => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('No GitHub issue yet'),
-                        trailing: FilledButton.tonal(
-                          onPressed: () => _retry(context, ref),
-                          child: const Text('Create issue'),
-                        ),
-                      ),
-                      GitHubIssue(
-                        state: 'created',
-                        :final number,
-                        :final url,
-                      ) =>
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            onPressed: url == null
-                                ? null
-                                : () => _open(context, url),
-                            icon: const Icon(Icons.open_in_new, size: 18),
-                            label: Text(
-                              'Issue #$number${issue.issueState == 'closed' ? ' (closed)' : ''}',
-                            ),
-                          ),
-                        ),
-                      GitHubIssue(state: 'failed', :final error) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          Icons.error_outline,
-                          color: theme.colorScheme.error,
-                        ),
-                        title: const Text('Couldn\'t create the issue'),
-                        subtitle: Text(error ?? ''),
-                        trailing: FilledButton.tonal(
-                          onPressed: () => _retry(context, ref),
-                          child: const Text('Retry'),
-                        ),
-                      ),
-                      _ => const Row(
-                        children: [
-                          SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          SizedBox(width: 8),
-                          Text('Creating issue…'),
-                        ],
-                      ),
-                    },
-                    for (final pr in gh.prs) _PullRequestTile(pr: pr),
-                    if (gh.prs.isEmpty && issue?.state == 'created')
-                      Text(
-                        'No linked pull requests yet. A PR links when it says "Closes #${issue!.number}" '
-                        'or its branch starts with "${issue.number}-".',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                  ],
-                ),
-              },
-            ],
+      padding: const EdgeInsets.only(top: 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(border: Border(bottom: t.inkRule)),
+            child: Text('GitHub', style: theme.textTheme.titleMedium),
           ),
-        ),
+          const SizedBox(height: 12),
+          switch (async) {
+            AsyncValue(:final error?) when gh == null => Text(
+              errorMessage(error),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
+            _ when gh == null => const LinearProgressIndicator(),
+            _ => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                switch (issue) {
+                  null => Row(
+                    children: [
+                      const Expanded(child: Text('No GitHub issue yet')),
+                      OutlinedButton(
+                        onPressed: () => _retry(context, ref),
+                        child: const Text('Create issue'),
+                      ),
+                    ],
+                  ),
+                  GitHubIssue(state: 'created', :final number, :final url) =>
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: url == null
+                            ? null
+                            : () => _open(context, url),
+                        icon: const Icon(Icons.open_in_new, size: 18),
+                        label: Text.rich(
+                          TextSpan(
+                            children: [
+                              const TextSpan(text: 'Issue '),
+                              TextSpan(
+                                text: '#$number',
+                                style: t.mono(const TextStyle()),
+                              ),
+                              if (issue.issueState == 'closed')
+                                const TextSpan(text: ' (closed)'),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  GitHubIssue(state: 'failed', :final error) => Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Couldn\'t create the issue'),
+                            Text(
+                              error ?? '',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.error,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton(
+                        onPressed: () => _retry(context, ref),
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                  _ => const Row(
+                    children: [
+                      SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 8),
+                      Text('Creating issue…'),
+                    ],
+                  ),
+                },
+                if (gh.prs.isNotEmpty) const SizedBox(height: 8),
+                for (final pr in gh.prs) _PullRequestTile(pr: pr),
+                if (gh.prs.isEmpty && issue?.state == 'created')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'No linked pull requests yet. A PR links when it says "Closes #${issue!.number}" '
+                      'or its branch starts with "${issue.number}-".',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+              ],
+            ),
+          },
+        ],
       ),
     );
   }
@@ -276,47 +324,51 @@ class _PullRequestTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (good, _, _) = _palette(context);
-    final muted = Theme.of(context).colorScheme.outline;
+    final t = context.tokens;
     final _Look state = switch (pr.state) {
-      'merged' => (Icons.merge, 'Merged', Colors.purple),
-      'closed' => (Icons.close, 'Closed', muted),
-      _ => (Icons.call_merge, 'Open', good),
+      'merged' => ('Merged', StatusTone.good),
+      'closed' => ('Closed', StatusTone.quiet),
+      _ => ('Open', StatusTone.neutral),
     };
     final chips = <_Look>[
       state,
-      if (pr.draft) (Icons.edit_note, 'Draft', muted),
-      ?_reviewLook(pr.review, context),
-      ?_ciLook(pr.ci, context),
+      if (pr.draft) ('Draft', StatusTone.neutral),
+      ?_reviewLook(pr.review),
+      ?_ciLook(pr.ci),
     ];
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      title: Text(pr.title),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${pr.repository}#${pr.number}${pr.author == null ? '' : ' by ${pr.author}'}',
-          ),
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 4,
-            runSpacing: 4,
-            children: [
-              for (final (icon, label, color) in chips)
-                Chip(
-                  avatar: Icon(icon, size: 16, color: color),
-                  label: Text(label),
-                  side: BorderSide(color: color),
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-            ],
-          ),
-        ],
+    return DecoratedBox(
+      decoration: BoxDecoration(border: Border(top: t.hairline)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+        title: Text(pr.title),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: '${pr.repository}#${pr.number}',
+                    style: t.mono(const TextStyle()),
+                  ),
+                  if (pr.author != null) TextSpan(text: ' by ${pr.author}'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: [
+                for (final (label, tone) in chips)
+                  StatusChip(label: label, tone: tone),
+              ],
+            ),
+          ],
+        ),
+        trailing: Icon(Icons.open_in_new, size: 18, color: t.muted),
+        onTap: () => _open(context, pr.url),
       ),
-      trailing: const Icon(Icons.open_in_new, size: 18),
-      onTap: () => _open(context, pr.url),
     );
   }
 }

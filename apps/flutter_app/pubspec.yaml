@@ -24,3 +24,18 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts: # Red Hat, SIL Open Font License 1.1 (assets/fonts/OFL.txt)
+    - family: RedHatText
+      fonts:
+        - asset: assets/fonts/RedHatText-Regular.ttf
+        - asset: assets/fonts/RedHatText-Medium.ttf
+          weight: 500
+    - family: RedHatDisplay
+      fonts:
+        - asset: assets/fonts/RedHatDisplay-SemiBold.ttf
+          weight: 600
+    - family: RedHatMono
+      fonts:
+        - asset: assets/fonts/RedHatMono-Regular.ttf
+        - asset: assets/fonts/RedHatMono-Medium.ttf
+          weight: 500

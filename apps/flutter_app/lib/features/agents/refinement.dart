@@ -7,9 +7,11 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api.dart';
 import '../../core/models.dart';
+import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth.dart';
 import '../boards/board_page.dart';
+import '../github/github.dart';
 
 /// Rechecked every 5 s while the run is queued, since why it waits changes as workers come and go.
 /// A failed fetch is rechecked too, so an outage doesn't stop it for good.
@@ -88,100 +90,117 @@ class RefinementPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final t = context.tokens;
     final api = ref.read(apiProvider);
     final async = ref.watch(refinementProvider(taskId));
     final r = async.value;
     final run = r?.run, spec = r?.spec;
+    final quiet = theme.textTheme.bodyMedium?.copyWith(color: t.muted);
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.auto_awesome, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('AI spec', style: theme.textTheme.titleMedium),
-                ),
-                if (repository != null && r != null)
-                  if (run != null && run.active)
-                    TextButton(
-                      onPressed: () => runWithFeedback(context, () async {
-                        await api.cancelRun(run.id);
-                        _refresh(ref);
-                      }),
-                      child: const Text('Cancel'),
-                    )
-                  else
-                    FilledButton.tonal(
-                      onPressed: () => runWithFeedback(context, () async {
-                        await api.refine(taskId);
-                        _refresh(ref);
-                      }),
-                      child: Text(
-                        spec == null ? 'Refine with AI' : 'Refine again',
-                      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(border: Border(bottom: t.inkRule)),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text('AI spec', style: theme.textTheme.titleMedium),
+              ),
+              if (repository != null && r != null)
+                if (run != null && run.active)
+                  TextButton(
+                    onPressed: () => runWithFeedback(context, () async {
+                      await api.cancelRun(run.id);
+                      _refresh(ref);
+                    }),
+                    child: const Text('Cancel'),
+                  )
+                else
+                  OutlinedButton(
+                    onPressed: () => runWithFeedback(context, () async {
+                      await api.refine(taskId);
+                      _refresh(ref);
+                    }),
+                    child: Text(
+                      spec == null ? 'Refine with AI' : 'Refine again',
                     ),
+                  ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (repository == null)
+          Text(
+            'Connect a GitHub repository to this board (the link icon on the board) and a worker can turn this brief into a spec.',
+            style: quiet,
+          )
+        else
+          switch (async) {
+            AsyncValue(:final error?) when r == null => Text(
+              errorMessage(error),
+              style: theme.textTheme.bodyMedium?.copyWith(color: t.danger),
+            ),
+            _ when r == null => const LinearProgressIndicator(),
+            _ => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (run != null && run.active)
+                  _LiveRun(
+                    run: run,
+                    waiting: r.waiting,
+                    repository: repository!,
+                    onChange: () => _refresh(ref),
+                  ),
+                if (run != null && run.state == 'failed')
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const StatusChip(label: 'Failed', tone: StatusTone.bad),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('The last refinement failed'),
+                              Text(
+                                run.error ?? '',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: t.danger,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (spec != null)
+                  _SpecView(
+                    spec: spec,
+                    stale: run != null && run.active,
+                    // A succeeded run is the one that wrote the newest spec.
+                    madeBy: run != null && run.state == 'succeeded'
+                        ? run
+                        : null,
+                    onApprove: () => runWithFeedback(context, () async {
+                      await api.approveSpec(spec.id);
+                      _refresh(ref);
+                    }),
+                  )
+                else if (run == null)
+                  Text(
+                    'The Refiner reads $repository on your worker, read-only, and writes requirements, acceptance criteria '
+                    'and the code it found. You approve it before anything else happens.',
+                    style: quiet,
+                  ),
               ],
             ),
-            const SizedBox(height: 8),
-            if (repository == null)
-              const Text(
-                'Connect a GitHub repository to this board (the link icon on the board) and a worker can turn this brief into a spec.',
-              )
-            else
-              switch (async) {
-                AsyncValue(:final error?) when r == null => Text(
-                  errorMessage(error),
-                ),
-                _ when r == null => const LinearProgressIndicator(),
-                _ => Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (run != null && run.active)
-                      _LiveRun(
-                        run: run,
-                        waiting: r.waiting,
-                        repository: repository!,
-                        onChange: () => _refresh(ref),
-                      ),
-                    if (run != null && run.state == 'failed')
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          Icons.error_outline,
-                          color: theme.colorScheme.error,
-                        ),
-                        title: const Text('The last refinement failed'),
-                        subtitle: Text(run.error ?? ''),
-                      ),
-                    if (spec != null)
-                      _SpecView(
-                        spec: spec,
-                        stale: run != null && run.active,
-                        // A succeeded run is the one that wrote the newest spec.
-                        madeBy: run != null && run.state == 'succeeded'
-                            ? run
-                            : null,
-                        onApprove: () => runWithFeedback(context, () async {
-                          await api.approveSpec(spec.id);
-                          _refresh(ref);
-                        }),
-                      )
-                    else if (run == null)
-                      Text(
-                        'The Refiner reads $repository on your worker, read-only, and writes requirements, acceptance criteria '
-                        'and the code it found. You approve it before anything else happens.',
-                      ),
-                  ],
-                ),
-              },
-          ],
-        ),
-      ),
+          },
+      ],
     );
   }
 }
@@ -235,49 +254,57 @@ class _LiveRun extends ConsumerWidget {
     final state = progress?.state ?? run.state;
     final events = progress?.events ?? const <RunEvent>[];
     final theme = Theme.of(context);
+    final t = context.tokens;
+    final line = t.mono(theme.textTheme.bodySmall!);
     final viewer = ref.watch(authProvider)?.user.login;
     final queued = state == 'queued';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const LinearProgressIndicator(),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              queued
+                  ? const StatusChip(label: 'Queued', tone: StatusTone.quiet)
+                  : const StatusChip(label: 'Running', tone: StatusTone.active),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  queued
+                      ? waiting?.describe(
+                              viewer: viewer,
+                              repository: repository,
+                            ) ??
+                            'Waiting for the worker of whoever connected $repository…'
+                      : 'Refining against $repository with ${run.harnessLabel}${_on(run)}…',
+                ),
+              ),
+              if (queued && (waiting?.mine(viewer) ?? false))
+                const WorkersButton(),
+            ],
+          ),
+          if (run.attempt > 1)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
               child: Text(
-                queued
-                    ? waiting?.describe(
-                            viewer: viewer,
-                            repository: repository,
-                          ) ??
-                          'Waiting for the worker of whoever connected $repository…'
-                    : 'Refining against $repository with ${run.harnessLabel}${_on(run)}…',
+                '${run.attempt >= 3 ? 'Last try' : 'Retrying'} (attempt ${run.attempt} of 3)${run.retryReason == null ? '' : ': ${run.retryReason}'}',
+                style: theme.textTheme.bodySmall,
               ),
             ),
-            if (queued && (waiting?.mine(viewer) ?? false))
-              const WorkersButton(),
-          ],
-        ),
-        if (run.attempt > 1)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              '${run.attempt >= 3 ? 'Last try' : 'Retrying'} (attempt ${run.attempt} of 3)${run.retryReason == null ? '' : ': ${run.retryReason}'}',
-              style: theme.textTheme.bodySmall,
+          const SizedBox(height: 8),
+          for (final e in events.reversed.take(8))
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              decoration: BoxDecoration(border: Border(top: t.hairline)),
+              child: Text(
+                describe(e),
+                style: line,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-          ),
-        for (final e in events.reversed.take(8))
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              describe(e),
-              style: theme.textTheme.bodySmall,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        const SizedBox(height: 12),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -297,6 +324,7 @@ class _SpecView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final t = context.tokens;
     Widget section(String title, List<String> items, {bool numbered = false}) =>
         items.isEmpty
         ? const SizedBox.shrink()
@@ -321,13 +349,10 @@ class _SpecView extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: Text(spec.title, style: theme.textTheme.titleLarge),
+              child: Text(spec.title, style: theme.textTheme.titleMedium),
             ),
             if (spec.approved)
-              const Chip(
-                avatar: Icon(Icons.verified_outlined, size: 18),
-                label: Text('Approved'),
-              ),
+              const StatusChip(label: 'Approved', tone: StatusTone.good),
           ],
         ),
         Text(
@@ -368,10 +393,13 @@ class _SpecView extends StatelessWidget {
                     : 'Not found at these lines; check before relying on it',
                 child: Icon(
                   e.verified ? Icons.check_circle_outline : Icons.help_outline,
-                  color: e.verified ? null : theme.colorScheme.error,
+                  color: e.verified ? t.muted : t.danger,
                 ),
               ),
-              title: Text('${e.path}:${e.startLine}-${e.endLine}'),
+              title: Text(
+                '${e.path}:${e.startLine}-${e.endLine}',
+                style: t.mono(theme.textTheme.bodyMedium!),
+              ),
               subtitle: Text(e.note),
             ),
         ],
@@ -379,7 +407,7 @@ class _SpecView extends StatelessWidget {
           const SizedBox(height: 16),
           Align(
             alignment: Alignment.centerLeft,
-            child: FilledButton.icon(
+            child: OutlinedButton.icon(
               onPressed: onApprove,
               icon: const Icon(Icons.check),
               label: const Text('Approve spec'),
