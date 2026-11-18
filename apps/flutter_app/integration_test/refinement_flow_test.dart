@@ -85,16 +85,13 @@ void main() {
         title,
       );
       await tester.testTextInput.receiveAction(TextInputAction.done);
-      await waitFor(find.text('Waiting for a worker'));
+      await waitFor(find.text('None of your workers is online'));
 
       await tester.tap(find.text(title));
-      await waitFor(
-        find.textContaining(
-          'Waiting for the worker of whoever connected $repository',
-        ),
-      );
+      await waitFor(find.text('None of your workers is online'));
 
-      // Play the worker: register as this user, claim the run, report progress, then deliver a spec.
+      // Play the worker: pair as this user (a code, then the public pair call, as `connect` does), claim the run,
+      // report progress, then deliver a spec.
       final http = Dio(
         BaseOptions(
           baseUrl: apiUrl,
@@ -103,8 +100,11 @@ void main() {
           },
         ),
       );
+      final code = (await tester.runAsync(() => http.post('/workers/pairing')))!
+          .data['code'];
       final workerToken = (await tester.runAsync(
-        () => http.post('/workers', data: {'name': 'Test worker'}),
+        () => Dio(BaseOptions(baseUrl: apiUrl))
+            .post('/workers/pair', data: {'code': code, 'name': 'Test worker'}),
       ))!.data['token'];
       final worker = Dio(
         BaseOptions(
@@ -138,6 +138,9 @@ void main() {
         ),
       );
       await waitFor(find.text('read lib/settings.dart'));
+      await waitFor(
+        find.text('Refining against $repository with OpenCode on Test worker…'),
+      );
 
       await tester.runAsync(
         () => worker.post(
@@ -167,6 +170,7 @@ void main() {
         ),
       );
       await waitFor(find.text('Connect GitHub from settings'));
+      expect(find.textContaining('OpenCode on Test worker'), findsOneWidget);
       expect(find.text('lib/settings.dart:1-20'), findsOneWidget);
       expect(
         find.text('• Should signing out disconnect GitHub?'),

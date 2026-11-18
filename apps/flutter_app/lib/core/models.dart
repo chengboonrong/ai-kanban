@@ -163,6 +163,7 @@ class Board {
     required this.name,
     required this.columns,
     this.repository,
+    this.waiting,
     this.offline = false,
   });
   factory Board.fromJson(Map<String, dynamic> j, {bool offline = false}) =>
@@ -170,6 +171,7 @@ class Board {
         id: j['id'],
         name: j['name'],
         repository: j['repository'],
+        waiting: Waiting.fromJson(j['waiting']),
         columns: [for (final c in j['columns']) BoardColumn.fromJson(c)],
         offline: offline,
       );
@@ -177,6 +179,9 @@ class Board {
 
   /// GitHub "owner/name" that refinements read; null until connected.
   final String? repository;
+
+  /// Why the board's queued runs wait; null when none is queued.
+  final Waiting? waiting;
   final List<BoardColumn> columns;
 
   /// True when this is the copy saved on the device because the API couldn't be reached.
@@ -187,6 +192,7 @@ class Board {
     id: id,
     name: name,
     repository: repository,
+    waiting: waiting,
     offline: offline,
     columns: [
       for (final c in columns)
@@ -210,6 +216,7 @@ class Board {
       id: id,
       name: name,
       repository: repository,
+      waiting: waiting,
       columns: cols,
       offline: offline,
     );
@@ -288,21 +295,46 @@ class AgentRun {
   AgentRun({
     required this.id,
     required this.state,
+    this.repository = '',
     this.error,
     this.model,
     this.commitSha,
+    this.attempt = 1,
+    this.retryReason,
+    this.harness = 'opencode',
+    this.workerName,
   });
   factory AgentRun.fromJson(Map<String, dynamic> j) => AgentRun(
     id: j['id'],
     state: j['state'],
+    repository: j['repository'] ?? '',
     error: j['error'],
     model: j['model'],
     commitSha: j['commitSha'],
+    attempt: j['attempt'] ?? 1,
+    retryReason: j['retryReason'],
+    harness: j['harness'] ?? 'opencode',
+    workerName: j['workerName'],
   );
-  final String id, state;
+  final String id, state, repository;
   final String? error, model, commitSha;
 
+  /// 1 for the first try; the API retries a run whose worker vanished, up to 3 attempts in all.
+  final int attempt;
+
+  /// Why the previous attempt ended, on a retry.
+  final String? retryReason;
+
+  /// opencode or claude-code: the agent the claiming worker refines with (opencode while queued).
+  final String harness;
+
+  /// The worker's name, only when it is the viewer's own worker (names leak hostnames).
+  final String? workerName;
+
   bool get active => state == 'queued' || state == 'running';
+
+  String get harnessLabel =>
+      harness == 'claude-code' ? 'Claude Code' : 'OpenCode';
 }
 
 class RunEvent {
@@ -366,7 +398,68 @@ class Spec {
 class Refinement {
   Refinement.fromJson(Map<String, dynamic> j)
     : run = j['run'] == null ? null : AgentRun.fromJson(j['run']),
-      spec = j['spec'] == null ? null : Spec.fromJson(j['spec']);
+      spec = j['spec'] == null ? null : Spec.fromJson(j['spec']),
+      waiting = Waiting.fromJson(j['waiting']);
   final AgentRun? run;
   final Spec? spec;
+  final Waiting? waiting;
+}
+
+/// Why a queued run isn't picked up, judged from the workers of whoever connected the board's repository.
+class Waiting {
+  Waiting({required this.reason, this.connector});
+  static Waiting? fromJson(Map<String, dynamic>? j) => j == null
+      ? null
+      : Waiting(reason: j['reason'], connector: j['connector']);
+
+  /// no_connector, no_worker_online, repository_not_listed or busy.
+  final String reason;
+
+  /// Login of whoever connected the board's repository; their workers are the ones that can take the run.
+  final String? connector;
+
+  /// The viewer's own workers are the ones it waits for.
+  bool mine(String? viewer) => connector != null && connector == viewer;
+
+  /// The reason in words, or null for one this app doesn't know.
+  String? describe({required String? viewer, required String? repository}) {
+    // Nobody connected it (or that account is gone), so no worker can ever take the run.
+    if (reason == 'no_connector' || connector == null) {
+      return 'Connect the repository again on this board to have it refined';
+    }
+    final mine = this.mine(viewer);
+    final whose = mine ? 'Your workers' : "$connector's workers";
+    return switch (reason) {
+      'no_worker_online' =>
+        mine
+            ? 'None of your workers is online'
+            : 'No worker of $connector is online',
+      'repository_not_listed' => "$whose don't list $repository",
+      'busy' => '$whose are busy with another task',
+      _ => null,
+    };
+  }
+}
+
+class Worker {
+  Worker.fromJson(Map<String, dynamic> j)
+    : id = j['id'],
+      name = j['name'],
+      repositories = List<String>.from(j['repositories'] ?? const []),
+      lastSeenAt = j['lastSeenAt'] == null
+          ? null
+          : DateTime.parse(j['lastSeenAt']).toLocal(),
+      state = j['state'],
+      currentTask = j['currentTask']?['title'];
+  final String id, name;
+  final List<String> repositories;
+
+  /// Null until the worker first calls in.
+  final DateTime? lastSeenAt;
+
+  /// busy (running a job), online (seen in the last 30 s) or offline.
+  final String state;
+
+  /// Title of the task it is refining, while busy.
+  final String? currentTask;
 }

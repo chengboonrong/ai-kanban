@@ -49,7 +49,7 @@ Profile picture → **Settings** → **Developer settings** → **GitHub Apps** 
 
 | Permission | Access | Why |
 | --- | --- | --- |
-| Contents | Read-only | Cloud workers will clone the repository (Milestone 5) |
+| Contents | Read-only | The PR query reads each linked PR's head commit and its CI status; GitHub may require this for commit data (unverified until a real install; there is no cloud worker that clones) |
 | Issues | Read and write | One issue per approved spec |
 | Pull requests | Read-only | Linked PRs and their reviews |
 | Checks | Read-only | CI status |

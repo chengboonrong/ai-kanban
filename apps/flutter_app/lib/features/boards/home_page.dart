@@ -47,6 +47,11 @@ class HomePage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Workspaces'),
         actions: [
+          IconButton(
+            tooltip: 'Workers',
+            icon: const Icon(Icons.computer_outlined),
+            onPressed: () => context.go('/workers'),
+          ),
           Center(child: Text(ref.watch(authProvider)?.user.login ?? '')),
           IconButton(
             tooltip: 'Sign out',

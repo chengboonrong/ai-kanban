@@ -2,6 +2,7 @@ import { buildApp } from './app.ts';
 import { createPool } from './db.ts';
 import { githubConfigFromEnv } from './github.ts';
 import { migrate } from './migrate.ts';
+import { startRunSweeper } from './refinement.ts';
 import { buildWebhookApp, startGitHubSync } from './sync.ts';
 
 const pool = createPool();
@@ -14,6 +15,7 @@ await app.listen({ host, port: Number(process.env.PORT ?? 8080) });
 const { config: github, missing } = githubConfigFromEnv();
 const webhooks = await buildWebhookApp({ pool, github, logger: true });
 await webhooks.listen({ host, port: Number(process.env.GITHUB_WEBHOOK_PORT ?? 8081) });
+startRunSweeper({ pool, log: app.log });
 if (github) {
   startGitHubSync({ pool, github, log: app.log });
   app.log.info('GitHub sync on');

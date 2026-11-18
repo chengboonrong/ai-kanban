@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { type Db, httpError, tx } from './db.ts';
+import { waitingFor } from './refinement.ts';
 
 const uuid = { type: 'string', format: 'uuid' } as const;
 const idParams = { type: 'object', required: ['id'], properties: { id: uuid } } as const;
@@ -15,9 +16,11 @@ const TASK = `id, board_id AS "boardId", column_id AS "columnId", title, descrip
 
 export const REPOSITORY = { type: ['string', 'null'], pattern: '^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$', maxLength: 140 } as const;
 
-export const RUN = `id, task_id AS "taskId", repository, state, execution_target AS "executionTarget", worker_id AS "workerId",
+/** An agent_runs row as `user` (a query parameter such as '$2') sees it: the worker's name only if it is theirs (names leak hostnames). */
+export const RUN = (user: string) => `id, task_id AS "taskId", repository, state, execution_target AS "executionTarget", worker_id AS "workerId",
   harness, model, session_id AS "sessionId", repository_commit_sha AS "commitSha", token_usage AS "tokenUsage", cost::float8 AS cost,
-  error, created_at AS "createdAt", started_at AS "startedAt", completed_at AS "completedAt"`;
+  error, attempt, retry_reason AS "retryReason", created_at AS "createdAt", started_at AS "startedAt", completed_at AS "completedAt",
+  (SELECT w.name FROM workers w WHERE w.id = worker_id AND w.owner_id = ${user}) AS "workerName"`;
 
 /** A github_issues row (alias gi) on a card: the issue once it exists, else where its creation stands. */
 const ISSUE_JSON = `CASE gi.state
@@ -108,22 +111,34 @@ async function loadBoard(db: Db, boardId: string) {
      WHERE board_id = $1 ORDER BY position`,
     [boardId],
   );
-  return { ...board, columns: columns.map((col) => ({ ...col, tasks: tasks.filter((t) => t.columnId === col.id) })) };
+  // One reason for the whole board: it depends only on the board's connector and repository, not on the card.
+  const waiting = board?.repository && tasks.some((t) => t.refinement === 'queued') ? await waitingFor(db, boardId, board.repository) : null;
+  return { ...board, waiting, columns: columns.map((col) => ({ ...col, tasks: tasks.filter((t) => t.columnId === col.id) })) };
 }
 
 export const logActivity = (db: Db, taskId: string, actorId: string, kind: string, data: object = {}) =>
   db.query('INSERT INTO task_activity (task_id, actor_id, kind, data) VALUES ($1, $2, $3, $4)', [taskId, actorId, kind, data]);
 
 /** Queues a refinement unless one is already queued or running for the task; returns the active run either way. */
-export async function enqueueRun(db: Db, taskId: string, userId: string, repository: string) {
+export async function enqueueRun(
+  db: Db,
+  taskId: string,
+  userId: string,
+  repository: string,
+  retry?: { attempt: number; retryReason: string },
+) {
   const { rows } = await db.query(
-    `INSERT INTO agent_runs (task_id, requested_by, repository) VALUES ($1, $2, $3)
+    `INSERT INTO agent_runs (task_id, requested_by, repository, attempt, retry_reason) VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (task_id) WHERE state IN ('queued', 'running') DO NOTHING RETURNING id`,
-    [taskId, userId, repository],
+    [taskId, userId, repository, retry?.attempt ?? 1, retry?.retryReason ?? null],
   );
-  if (rows[0]) await logActivity(db, taskId, userId, 'refinement_requested');
-  const { rows: [run] } = await db.query(`SELECT ${RUN} FROM agent_runs WHERE task_id = $1 AND state IN ('queued', 'running')`, [taskId]);
-  if (!run) return enqueueRun(db, taskId, userId, repository); // the active run ended in between: queue a new one
+  if (rows[0] && retry) await logActivity(db, taskId, userId, 'refinement_retried', { reason: retry.retryReason, attempt: retry.attempt });
+  else if (rows[0]) await logActivity(db, taskId, userId, 'refinement_requested');
+  const { rows: [run] } = await db.query(`SELECT ${RUN('$2')} FROM agent_runs WHERE task_id = $1 AND state IN ('queued', 'running')`, [
+    taskId,
+    userId,
+  ]);
+  if (!run) return enqueueRun(db, taskId, userId, repository, retry); // the active run ended in between: queue a new one
   return { run, created: !!rows[0] };
 }
 
@@ -169,7 +184,8 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
     const { id } = req.params as Id;
     if ((await workspaceRole(pool, req.userId, id)) !== 'owner') throw httpError(403, 'only owners can delete a workspace');
     await tx(pool, async (c) => {
-      // Tasks locked in id order first, as the GitHub sync locks them, so the cascade can't deadlock with it.
+      // Boards before tasks, as expiring a run takes them; tasks in id order, as the GitHub sync locks them. Otherwise the cascade deadlocks with either.
+      await c.query('SELECT 1 FROM boards WHERE workspace_id = $1 ORDER BY id FOR UPDATE', [id]);
       await c.query('SELECT 1 FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.workspace_id = $1 ORDER BY t.id FOR UPDATE OF t', [id]);
       await c.query('DELETE FROM workspaces WHERE id = $1', [id]);
     });
@@ -229,7 +245,8 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
   app.delete('/boards/:id', { schema: { params: idParams } }, async (req, reply) => {
     const id = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
     await tx(pool, async (c) => {
-      await c.query('SELECT 1 FROM tasks WHERE board_id = $1 ORDER BY id FOR UPDATE', [id]); // as for workspaces above
+      await c.query('SELECT 1 FROM boards WHERE id = $1 FOR UPDATE', [id]); // as for workspaces above
+      await c.query('SELECT 1 FROM tasks WHERE board_id = $1 ORDER BY id FOR UPDATE', [id]);
       await c.query('DELETE FROM boards WHERE id = $1', [id]);
     });
     return reply.code(204).send();
