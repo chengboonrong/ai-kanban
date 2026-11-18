@@ -24,6 +24,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import type { OpencodeClient, Part } from '@opencode-ai/sdk/v2';
 import { claudeArgs, parseClaudeLine, refineWithClaude } from '../src/adapters/claude.ts';
+import { refineInOrca } from '../src/adapters/orca.ts';
 import { refine, toolEvent } from '../src/adapters/opencode.ts';
 import { checkCheckout, escapingSymlinks, exportCommit, githubCheckouts, scrub, snapshot, verifyEvidence } from '../src/repository.ts';
 import { launchdPlist } from '../src/service.ts';
@@ -349,6 +350,73 @@ test('refineWithClaude kills a claude that ignores SIGTERM once aborted', async 
   const waited = Date.now() - t0;
   assert.ok(waited >= 4900 && waited < 7000, `SIGKILL comes 5 s after SIGTERM (took ${waited} ms)`);
   assert.equal(alive(started().pid), false);
+});
+
+// A fake `orca` next to it: records each call; FAKE_ORCA=down answers as Orca does when the app isn't running, and
+// garbage like a CLI that doesn't know the command. On
+// close it also records what the terminal would have shown, read from the log its create command tails.
+writeFileSync(
+  path.join(bin, 'orca'),
+  `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const log = process.env.FAKE_ORCA_LOG;
+const calls = fs.existsSync(log) ? JSON.parse(fs.readFileSync(log, 'utf8')) : [];
+const call = { args };
+if (args[1] === 'close') call.shown = fs.readFileSync(calls[0].args[calls[0].args.indexOf('--command') + 1].match(/'([^']*)'/)[1], 'utf8');
+fs.writeFileSync(log, JSON.stringify([...calls, call]));
+if (process.env.FAKE_ORCA === 'garbage') console.log('Usage: orca …'), process.exit(2);
+if (process.env.FAKE_ORCA === 'down') console.log(JSON.stringify({ ok: false, error: { code: 'runtime_unavailable', message: 'Orca is not running' } })), process.exit(1);
+console.log(JSON.stringify({ ok: true, result: args[1] === 'create' ? { terminal: { handle: 'term-1' } } : {} }));
+`,
+);
+chmodSync(path.join(bin, 'orca'), 0o755);
+
+async function inOrca(orcaMode: string, title = 'Document hello.txt') {
+  const checkout = tmp();
+  const log = path.join(tmp(), 'orca.json');
+  process.env.FAKE_CLAUDE = 'success';
+  process.env.FAKE_CLAUDE_LOG = path.join(tmp(), 'claude.json');
+  process.env.FAKE_ORCA = orcaMode;
+  process.env.FAKE_ORCA_LOG = log;
+  const events: unknown[] = [];
+  const signal = new AbortController().signal;
+  const out = await refineInOrca({ checkout, dir: tmp(), job: { ...job, task: { ...job.task, title } }, commitSha: 'abc', signal, onEvent: (e) => events.push(e) });
+  assert.deepEqual(events.map((e) => (e as { kind: string }).kind), ['model', 'tool', 'tool'], 'the app still gets every event');
+  return { checkout, out, calls: JSON.parse(readFileSync(log, 'utf8')) as { args: string[]; shown?: string }[] };
+}
+
+test('refineInOrca shows the run in an Orca terminal in the checkout, tailed by absolute path, then closes it', async () => {
+  const { checkout, out, calls } = await inOrca('up', 'Document\x1b]0;pwned\x07 hello.txt');
+  assert.equal((out.spec as { title?: string }).title, 'Document hello.txt');
+  const [create, close] = calls;
+  assert.deepEqual(create.args.slice(0, 6), ['terminal', 'create', '--worktree', `path:${checkout}`, '--title', 'Refine: Document?]0;pwned? hello.txt']);
+  const command = create.args[create.args.indexOf('--command') + 1];
+  const file = command.match(/'([^']*)'/)![1];
+  // Only absolute paths and builtins: the shell starts in the checkout, whose contents are the repository's.
+  assert.equal(command, ` /usr/bin/tail -n +1 -f '${file}' & while [ -e '${file}' ] && kill -0 ${process.pid} 2>/dev/null; do /bin/sleep 1; done; kill $!; exit`);
+  assert.deepEqual(close.args, ['terminal', 'close', '--terminal', 'term-1', '--json']);
+  assert.match(close.shown!, /^Refining "Document\?\]0;pwned\? hello.txt"\nClaude Code \(claude-fable-5-2\)/);
+  assert.match(close.shown!, / {2}read hello.txt\n✗ read missing.txt\n$/);
+  assert.equal(existsSync(path.dirname(file)), false, 'the log is removed');
+
+  // The terminal's command ends by itself once the log is gone, so a close that never comes leaves no tail running.
+  mkdirSync(path.dirname(file));
+  writeFileSync(file, '');
+  const shell = spawn('/bin/zsh', ['-c', command], { stdio: 'ignore' });
+  await sleep(300);
+  rmSync(path.dirname(file), { recursive: true });
+  const code = await Promise.race([new Promise((r) => shell.on('exit', r)), sleep(4000).then(() => 'still running')]);
+  shell.kill('SIGKILL');
+  assert.notEqual(code, 'still running');
+});
+
+test('refineInOrca still refines when Orca is not running', async () => {
+  for (const mode of ['down', 'garbage']) {
+    const { out, calls } = await inOrca(mode);
+    assert.equal((out.spec as { title?: string }).title, 'Document hello.txt');
+    assert.equal(calls.length, 1, 'no close without a terminal');
+  }
 });
 
 test('launchdPlist runs start with absolute paths, a usable PATH and no token', () => {

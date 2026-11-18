@@ -13,6 +13,7 @@ import { createInterface } from 'node:readline/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { refineWithClaude } from './adapters/claude.ts';
+import { refineInOrca } from './adapters/orca.ts';
 import { type Job, refine, type RunEvent, startOpencode } from './adapters/opencode.ts';
 import { checkCheckout, escapingSymlinks, exportCommit, orcaCheckouts, scrub, snapshot, verifyEvidence } from './repository.ts';
 import { protectedFolder, service } from './service.ts';
@@ -30,6 +31,7 @@ type Config = {
   models: string[];
   refiner?: 'opencode' | 'claude';
   claudeModel?: string;
+  claudeInOrca?: boolean; // show Claude Code runs in a terminal of the local Orca app
 };
 
 const load = async (): Promise<Config> => {
@@ -322,7 +324,9 @@ async function runJob(config: Config, job: Job, ac: AbortController) {
     const onEvent = (e: RunEvent) => pending.push(e);
     const result =
       harness === 'claude-code'
-        ? await refineWithClaude({ dir: work, job, commitSha, model: config.claudeModel, signal: ac.signal, onEvent })
+        ? config.claudeInOrca
+          ? await refineInOrca({ checkout: dir, dir: work, job, commitSha, model: config.claudeModel, signal: ac.signal, onEvent })
+          : await refineWithClaude({ dir: work, job, commitSha, model: config.claudeModel, signal: ac.signal, onEvent })
         : await refine({ client: await opencodeClient(), dir: work, job, commitSha, models: config.models, signal: ac.signal, onEvent });
     result.spec.evidence = await verifyEvidence(work, result.spec.evidence);
     const spec = JSON.parse(await clean(JSON.stringify(result.spec))); // models copy absolute paths into prose

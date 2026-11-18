@@ -72,8 +72,14 @@ Linux and Windows: run `npm start` under your own service manager.
   web tools, no MCP servers, no hooks or skills, and reads outside the folder are refused. It refuses to run if Claude
   Code ever starts with more than that, and stops it if it calls any other tool. A short test run used about $0.13 of plan usage; a real refinement uses more.
 
-Orca isn't used to run the agent: it can't pass those restrictions, so an agent it launched would load your own MCP
-servers, skills and plugins.
+To watch Claude Code runs in Orca, add `"claudeInOrca": true` next to `"refiner": "claude"`. Each run then opens a
+terminal titled after the card in the checkout's Orca workspace, showing the model and each file it reads or searches,
+and closes it when the run ends (if the close fails, the terminal ends by itself). The worker still runs Claude Code
+itself, with the same restrictions; the terminal only shows its progress. Its shell starts in the checkout, as any
+terminal you open there in Orca does, so your own shell setup (direnv, nvm and the like) runs there first. If Orca
+isn't running, its CLI isn't found (`orca` on the PATH or Orca.app in /Applications) or the checkout isn't added to it,
+the run goes ahead without a terminal. Only the local Orca app works. Orca's own agent launch isn't used: it can't pass
+those restrictions, so an agent it launched would load your own MCP servers, skills and plugins.
 
 ## Troubleshooting
 
