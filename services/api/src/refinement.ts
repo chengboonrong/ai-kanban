@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type pg from 'pg';
@@ -13,26 +13,83 @@ const SPEC = `id, task_id AS "taskId", run_id AS "runId", version, content, repo
   approved_at AS "approvedAt", created_at AS "createdAt"`;
 const WORKER = `id, name, repositories, last_seen_at AS "lastSeenAt", created_at AS "createdAt"`;
 const ACTIVE = `state IN ('queued', 'running')`;
+/** Renewed by every event batch, never past 20 minutes from the start: then the sweeper times the run out. */
+const LEASE = `LEAST(now() + interval '90 seconds', started_at + interval '20 minutes')`;
+const ONLINE = `last_seen_at > now() - interval '30 seconds'`;
+const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford base32
+/** Uppercase, no separators, and the letters people mistake for digits read as those digits. */
+const normaliseCode = (code: string) => code.toUpperCase().replace(/[-\s]/g, '').replace(/[IL]/g, '1').replace(/O/g, '0');
 
 type Id = { id: string };
 
 export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
-  // ---- Worker registration (as the signed-in user) ----
+  // ---- Worker pairing: the signed-in user gets a code, `connect` on their machine trades it for a token ----
+  app.post('/workers/pairing', async (req, reply) => {
+    const code = Array.from(randomBytes(10), (b) => CODE_ALPHABET[b & 31]).join('');
+    const { rows } = await tx(pool, async (c) => {
+      await c.query('DELETE FROM worker_pairings WHERE owner_id = $1 AND (used_at IS NOT NULL OR expires_at <= now())', [req.userId]);
+      const inserted = await c.query(
+        `INSERT INTO worker_pairings (code_hash, owner_id, expires_at) VALUES ($1, $2, now() + interval '10 minutes') RETURNING expires_at AS "expiresAt"`,
+        [sha256(code), req.userId],
+      );
+      await c.query(
+        `DELETE FROM worker_pairings WHERE owner_id = $1 AND code_hash NOT IN (
+           SELECT code_hash FROM worker_pairings WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 5)`,
+        [req.userId],
+      );
+      return inserted;
+    });
+    return reply.code(201).send({ code: `${code.slice(0, 5)}-${code.slice(5)}`, expiresAt: rows[0].expiresAt });
+  });
+
+  // ponytail: no attempt limiter (50-bit codes, 10 minutes, at most 5 open per user); add one before the API is public.
   app.post(
-    '/workers',
-    { schema: { body: { type: 'object', required: ['name'], additionalProperties: false, properties: { name: { type: 'string', minLength: 1, maxLength: 100 } } } } },
+    '/workers/pair',
+    {
+      config: { public: true },
+      schema: {
+        body: {
+          type: 'object',
+          required: ['code', 'name'],
+          additionalProperties: false,
+          properties: { code: { type: 'string', maxLength: 40 }, name: { type: 'string', minLength: 1, maxLength: 100 } },
+        },
+      },
+    },
     async (req, reply) => {
+      const { code, name } = req.body as { code: string; name: string };
       const token = `wkr_${randomBytes(32).toString('base64url')}`;
-      const { rows } = await pool.query(`INSERT INTO workers (owner_id, name, token_hash) VALUES ($1, $2, $3) RETURNING ${WORKER}`, [
-        req.userId,
-        (req.body as { name: string }).name,
-        sha256(token),
-      ]);
-      return reply.code(201).send({ ...rows[0], token }); // the only time the token is shown
+      const paired = await tx(pool, async (c) => {
+        const { rows: [pairing] } = await c.query(
+          'UPDATE worker_pairings SET used_at = now() WHERE code_hash = $1 AND used_at IS NULL AND expires_at > now() RETURNING owner_id',
+          [sha256(normaliseCode(code))],
+        );
+        if (!pairing) throw httpError(400, 'invalid or expired code');
+        const { rows } = await c.query(`INSERT INTO workers (owner_id, name, token_hash) VALUES ($1, $2, $3) RETURNING ${WORKER}`, [
+          pairing.owner_id,
+          name,
+          sha256(token),
+        ]);
+        return rows[0];
+      });
+      return reply.code(201).send({ ...paired, token }); // the only time the token is shown
     },
   );
 
-  app.get('/workers', async (req) => (await pool.query(`SELECT ${WORKER} FROM workers WHERE owner_id = $1 ORDER BY created_at`, [req.userId])).rows);
+  // busy: running a job; online: seen in the last 30 s (every worker call counts).
+  app.get('/workers', async (req) => {
+    const { rows } = await pool.query(
+      `SELECT ${WORKER}, CASE WHEN cur.task IS NOT NULL THEN 'busy' WHEN ${ONLINE} THEN 'online' ELSE 'offline' END AS state,
+         cur.task AS "currentTask"
+       FROM workers w
+       LEFT JOIN LATERAL (
+         SELECT json_build_object('id', t.id, 'title', t.title) AS task
+         FROM agent_runs r JOIN tasks t ON t.id = r.task_id WHERE r.worker_id = w.id AND r.state = 'running' LIMIT 1) cur ON true
+       WHERE owner_id = $1 ORDER BY created_at`,
+      [req.userId],
+    );
+    return rows;
+  });
 
   app.delete('/workers/:id', { schema: { params: idParams } }, async (req, reply) => {
     const { id } = req.params as Id;
@@ -68,16 +125,19 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
   app.get('/tasks/:id/refinement', { schema: { params: idParams } }, async (req) => {
     const { id } = req.params as Id;
     await boardFor(pool, req.userId, 'task', id);
-    const { rows: [run] } = await pool.query(`SELECT ${RUN} FROM agent_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, [id]);
+    const { rows: [run] } = await pool.query(`SELECT ${RUN('$2')} FROM agent_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, [
+      id,
+      req.userId,
+    ]);
     const { rows: [spec] } = await pool.query(`SELECT ${SPEC} FROM specs WHERE task_id = $1 ORDER BY version DESC LIMIT 1`, [id]);
-    return { run: run ?? null, spec: spec ?? null };
+    return { run: run ?? null, spec: spec ?? null, waiting: run?.state === 'queued' ? await waitingFor(pool, id, run.repository) : null };
   });
 
   app.post('/runs/:id/cancel', { schema: { params: idParams } }, async (req) => {
     const run = await runForUser(pool, req.userId, (req.params as Id).id);
     const { rows } = await pool.query(
-      `UPDATE agent_runs SET state = 'cancelled', completed_at = now() WHERE id = $1 AND ${ACTIVE} RETURNING ${RUN}`,
-      [run.id],
+      `UPDATE agent_runs SET state = 'cancelled', completed_at = now() WHERE id = $1 AND ${ACTIVE} RETURNING ${RUN('$2')}`,
+      [run.id, req.userId],
     );
     if (!rows[0]) {
       const { rows: [now] } = await pool.query('SELECT state FROM agent_runs WHERE id = $1', [run.id]);
@@ -141,6 +201,8 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
   // ---- Worker protocol (worker token) ----
   const worker = { worker: true };
 
+  app.get('/worker/me', { config: worker }, async (req) => (await pool.query('SELECT id, name FROM workers WHERE id = $1', [req.workerId])).rows[0]);
+
   app.post(
     '/worker/claim',
     {
@@ -157,12 +219,15 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
     async (req, reply) => {
       const repositories = (req.body as { repositories: string[] }).repositories.map((r) => r.toLowerCase());
       await pool.query('UPDATE workers SET repositories = $2 WHERE id = $1', [req.workerId, repositories]);
+      // A worker runs one job at a time, so a run still running on it was lost in a crash: retry it now, not after the lease.
+      const { rows: stale } = await pool.query(`SELECT id FROM agent_runs WHERE worker_id = $1 AND state = 'running'`, [req.workerId]);
+      for (const { id } of stale) await expireRun(pool, id, 'the worker restarted', { retry: true, workerId: req.workerId });
       // Only runs on boards whose owner connected the repository and can still see the board, for repositories this
       // worker has checked out. Another member can't point a board at a repo and have someone else's worker read it.
       // The repository check also drops a run queued just as the board was pointed elsewhere.
       // ponytail: per-person workers; shared team workers need workspace opt-in plus GitHub access checks (Milestones 4-5).
       const { rows: [run] } = await pool.query(
-        `UPDATE agent_runs SET state = 'running', worker_id = $1, started_at = now()
+        `UPDATE agent_runs SET state = 'running', worker_id = $1, started_at = now(), lease_until = ${LEASE}
          WHERE id = (
            SELECT r.id FROM agent_runs r
            JOIN tasks t ON t.id = r.task_id
@@ -236,13 +301,19 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
           type: 'object',
           required: ['model', 'commitSha', 'spec'],
           additionalProperties: false,
-          properties: { ...finish, tokenUsage: { type: 'object' }, cost: { type: 'number', minimum: 0 }, spec: specSchema },
+          properties: {
+            ...finish,
+            tokenUsage: { type: 'object' },
+            cost: { type: 'number', minimum: 0 },
+            harness: { enum: ['opencode', 'claude-code'] },
+            spec: specSchema,
+          },
         },
       },
     },
     async (req) => {
       const { id } = req.params as Id;
-      const b = req.body as { model: string; sessionId?: string; commitSha: string; tokenUsage?: object; cost?: number; spec: object };
+      const b = req.body as { model: string; sessionId?: string; commitSha: string; tokenUsage?: object; cost?: number; harness?: string; spec: object };
       return tx(pool, async (c) => {
         // Task before run, the same order a task delete takes them in; also serialises with approve.
         await c.query('SELECT 1 FROM tasks WHERE id = (SELECT task_id FROM agent_runs WHERE id = $1) FOR UPDATE', [id]);
@@ -254,8 +325,8 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
         );
         await c.query(
           `UPDATE agent_runs SET state = 'succeeded', completed_at = now(), model = $2, session_id = $3, repository_commit_sha = $4,
-             token_usage = $5, cost = $6 WHERE id = $1`,
-          [id, b.model, b.sessionId ?? null, b.commitSha, b.tokenUsage ?? null, b.cost ?? null],
+             token_usage = $5, cost = $6, harness = $7 WHERE id = $1`,
+          [id, b.model, b.sessionId ?? null, b.commitSha, b.tokenUsage ?? null, b.cost ?? null, b.harness ?? 'opencode'],
         );
         await logActivity(c, run.task_id, run.requested_by, 'spec_ready', { version: spec.version });
         return spec;
@@ -294,6 +365,109 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       return reply.code(204).send();
     },
   );
+
+  // The worker is shutting down (SIGTERM): hand the run back for a retry instead of waiting for its lease to lapse.
+  app.post('/worker/runs/:id/release', { config: worker, schema: { params: idParams } }, async (req, reply) => {
+    const released = await expireRun(pool, (req.params as Id).id, 'the worker was stopped', { retry: true, workerId: req.workerId });
+    if (!released) throw httpError(409, 'run is not running on this worker');
+    return reply.code(204).send();
+  });
+}
+
+/** Why a queued run isn't being picked up, judged from the workers of whoever connected the board's repository. */
+async function waitingFor(db: pg.Pool, taskId: string, repository: string) {
+  const { rows: [w] } = await db.query(
+    `SELECT u.login AS connector, CASE
+         WHEN NOT COALESCE(bool_or(w.online), false) THEN 'no_worker_online'
+         WHEN NOT bool_or(w.online AND w.listed) THEN 'repository_not_listed'
+         WHEN NOT bool_or(w.online AND w.listed AND NOT w.busy) THEN 'busy' END AS reason
+     FROM tasks t
+     JOIN boards b ON b.id = t.board_id
+     LEFT JOIN users u ON u.id = b.repository_connected_by
+     LEFT JOIN LATERAL (
+       SELECT ${ONLINE} AS online, $2 = ANY(repositories) AS listed,
+         EXISTS (SELECT 1 FROM agent_runs r WHERE r.worker_id = x.id AND r.state = 'running') AS busy
+       FROM workers x WHERE x.owner_id = b.repository_connected_by) w ON true
+     WHERE t.id = $1 GROUP BY u.login`,
+    [taskId, repository],
+  );
+  return w?.reason ? { reason: w.reason, connector: w.connector } : null;
+}
+
+/**
+ * The one place the system fails a running run: lease lapsed (sweeper), worker stopped (release) or restarted (claim).
+ * Locks board (share) → task → run, the order a task delete and approve take them in. False if it wasn't running (or
+ * wasn't this worker's, or its lease was renewed meanwhile).
+ */
+export async function expireRun(pool: pg.Pool, runId: string, reason: string, opts: { retry: boolean; workerId?: string; lapsed?: boolean }) {
+  return tx(pool, async (c) => {
+    // The share lock keeps the board on its repository until a retry is queued for it.
+    const { rows: [board] } = await c.query(
+      `SELECT repository FROM boards WHERE id = (SELECT t.board_id FROM agent_runs r JOIN tasks t ON t.id = r.task_id WHERE r.id = $1) FOR SHARE`,
+      [runId],
+    );
+    if (!board) return false; // the run or its task is gone
+    await c.query('SELECT 1 FROM tasks WHERE id = (SELECT task_id FROM agent_runs WHERE id = $1) FOR UPDATE', [runId]);
+    const { rows: [run] } = await c.query(
+      `UPDATE agent_runs SET state = 'failed', completed_at = now(), error = $2
+       WHERE id = $1 AND state = 'running' AND ($3::uuid IS NULL OR worker_id = $3) AND (NOT $4 OR lease_until < now())
+       RETURNING id, task_id, requested_by, repository, attempt`,
+      [runId, reason, opts.workerId ?? null, opts.lapsed ?? false],
+    );
+    if (!run) return false;
+    if (!(opts.retry && (await retryRun(c, run, board.repository, reason)))) {
+      const { rows: [failed] } = await c.query('SELECT error FROM agent_runs WHERE id = $1', [run.id]);
+      await logActivity(c, run.task_id, run.requested_by, 'refinement_failed', { error: failed.error });
+    }
+    return true;
+  });
+}
+
+/** Queues the next attempt (true), unless the board moved to another repository since (the run must not read that one) or this was the third. */
+async function retryRun(
+  c: pg.PoolClient,
+  run: { id: string; task_id: string; requested_by: string; repository: string; attempt: number },
+  boardRepository: string | null,
+  reason: string,
+) {
+  if (boardRepository !== run.repository) return false;
+  if (run.attempt >= 3) {
+    await c.query('UPDATE agent_runs SET error = $2 WHERE id = $1', [run.id, `gave up after 3 attempts: ${reason}`]);
+    return false;
+  }
+  await enqueueRun(c, run.task_id, run.requested_by, run.repository, { attempt: run.attempt + 1, retryReason: reason });
+  return true;
+}
+
+/** One pass over runs whose lease lapsed; returns how many it looked at (at most 20). */
+export async function sweepRuns(pool: pg.Pool, log: FastifyBaseLogger) {
+  const { rows } = await pool.query(
+    `SELECT id, started_at + interval '20 minutes' <= now() AS capped FROM agent_runs WHERE state = 'running' AND lease_until < now() LIMIT 20`,
+  );
+  for (const { id, capped } of rows) {
+    try {
+      if (capped) await expireRun(pool, id, 'timed out after 20 minutes', { retry: false, lapsed: true });
+      else await expireRun(pool, id, 'the worker stopped responding', { retry: true, lapsed: true });
+    } catch (err) {
+      log.error(err, `expiring run ${id} failed`); // e.g. a deadlock with a workspace delete; the next pass tries again
+    }
+  }
+  return rows.length;
+}
+
+/** Every 15 s; the first pass waits a full lease so workers that were up before an API restart can renew theirs. */
+export function startRunSweeper({ pool, log }: { pool: pg.Pool; log: FastifyBaseLogger }) {
+  let timer: NodeJS.Timeout | undefined;
+  let stopped = false;
+  const tick = async () => {
+    await sweepRuns(pool, log).catch((e) => log.error(e, 'run sweep failed'));
+    if (!stopped) timer = setTimeout(tick, 15_000);
+  };
+  timer = setTimeout(tick, 90_000);
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
 }
 
 async function runForUser(db: pg.Pool, userId: string, runId: string) {
@@ -305,13 +479,12 @@ async function runForUser(db: pg.Pool, userId: string, runId: string) {
   return run as { id: string; task_id: string; state: string };
 }
 
-/** Locks a run this worker is executing; 409 once it was cancelled, finished, or belongs to another worker. */
+/** Locks a run this worker is executing and renews its lease; 409 once it was cancelled, finished, or belongs to another worker. */
 async function activeRunForWorker(c: pg.PoolClient, runId: string, workerId: string) {
-  const { rows: [run] } = await c.query('SELECT task_id, requested_by FROM agent_runs WHERE id = $1 AND worker_id = $2 AND state = $3 FOR UPDATE', [
-    runId,
-    workerId,
-    'running',
-  ]);
+  const { rows: [run] } = await c.query(
+    `UPDATE agent_runs SET lease_until = ${LEASE} WHERE id = $1 AND worker_id = $2 AND state = 'running' RETURNING task_id, requested_by`,
+    [runId, workerId],
+  );
   if (!run) throw httpError(409, 'run is not running on this worker');
   return run as { task_id: string; requested_by: string };
 }

@@ -9,6 +9,7 @@ import { buildApp } from '../src/app.ts';
 import { createPool } from '../src/db.ts';
 import { type GitHubClient, type GitHubConfig, gitHubClient, validSignature } from '../src/github.ts';
 import { migrate } from '../src/migrate.ts';
+import { pairWorker } from './helpers.ts';
 import { buildWebhookApp, syncOnce } from '../src/sync.ts';
 
 const pool = createPool(process.env.TEST_DATABASE_URL ?? 'postgres://kanban:kanban@localhost:55432/kanban_test');
@@ -111,7 +112,7 @@ async function fixture({ installed = true } = {}) {
   const ws = (await api('POST', '/workspaces', { name: 'Acme' })).json();
   const board = (await api('POST', `/workspaces/${ws.id}/boards`, { name: 'Roadmap' })).json();
   await api('PATCH', `/boards/${board.id}`, { repository });
-  const worker = as((await api('POST', '/workers', { name: 'Mac' })).json().token);
+  const worker = as((await pairWorker(api, 'Mac')).token);
   const repo: FakeRepo = { id: randomInt(1, 2 ** 47), issues: [], prs: new Map(), failures: [] };
   if (installed) repos.set(repository, repo);
   return { api, board, repository, worker, repo };

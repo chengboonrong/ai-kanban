@@ -15,9 +15,11 @@ const TASK = `id, board_id AS "boardId", column_id AS "columnId", title, descrip
 
 export const REPOSITORY = { type: ['string', 'null'], pattern: '^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$', maxLength: 140 } as const;
 
-export const RUN = `id, task_id AS "taskId", repository, state, execution_target AS "executionTarget", worker_id AS "workerId",
+/** An agent_runs row as `user` (a query parameter such as '$2') sees it: the worker's name only if it is theirs (names leak hostnames). */
+export const RUN = (user: string) => `id, task_id AS "taskId", repository, state, execution_target AS "executionTarget", worker_id AS "workerId",
   harness, model, session_id AS "sessionId", repository_commit_sha AS "commitSha", token_usage AS "tokenUsage", cost::float8 AS cost,
-  error, created_at AS "createdAt", started_at AS "startedAt", completed_at AS "completedAt"`;
+  error, attempt, retry_reason AS "retryReason", created_at AS "createdAt", started_at AS "startedAt", completed_at AS "completedAt",
+  (SELECT w.name FROM workers w WHERE w.id = worker_id AND w.owner_id = ${user}) AS "workerName"`;
 
 /** A github_issues row (alias gi) on a card: the issue once it exists, else where its creation stands. */
 const ISSUE_JSON = `CASE gi.state
@@ -115,15 +117,25 @@ export const logActivity = (db: Db, taskId: string, actorId: string, kind: strin
   db.query('INSERT INTO task_activity (task_id, actor_id, kind, data) VALUES ($1, $2, $3, $4)', [taskId, actorId, kind, data]);
 
 /** Queues a refinement unless one is already queued or running for the task; returns the active run either way. */
-export async function enqueueRun(db: Db, taskId: string, userId: string, repository: string) {
+export async function enqueueRun(
+  db: Db,
+  taskId: string,
+  userId: string,
+  repository: string,
+  retry?: { attempt: number; retryReason: string },
+) {
   const { rows } = await db.query(
-    `INSERT INTO agent_runs (task_id, requested_by, repository) VALUES ($1, $2, $3)
+    `INSERT INTO agent_runs (task_id, requested_by, repository, attempt, retry_reason) VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (task_id) WHERE state IN ('queued', 'running') DO NOTHING RETURNING id`,
-    [taskId, userId, repository],
+    [taskId, userId, repository, retry?.attempt ?? 1, retry?.retryReason ?? null],
   );
-  if (rows[0]) await logActivity(db, taskId, userId, 'refinement_requested');
-  const { rows: [run] } = await db.query(`SELECT ${RUN} FROM agent_runs WHERE task_id = $1 AND state IN ('queued', 'running')`, [taskId]);
-  if (!run) return enqueueRun(db, taskId, userId, repository); // the active run ended in between: queue a new one
+  if (rows[0] && retry) await logActivity(db, taskId, userId, 'refinement_retried', { reason: retry.retryReason, attempt: retry.attempt });
+  else if (rows[0]) await logActivity(db, taskId, userId, 'refinement_requested');
+  const { rows: [run] } = await db.query(`SELECT ${RUN('$2')} FROM agent_runs WHERE task_id = $1 AND state IN ('queued', 'running')`, [
+    taskId,
+    userId,
+  ]);
+  if (!run) return enqueueRun(db, taskId, userId, repository, retry); // the active run ended in between: queue a new one
   return { run, created: !!rows[0] };
 }
 
