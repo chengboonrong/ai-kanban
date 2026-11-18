@@ -1,5 +1,5 @@
 // Drives the real app against a running API (cd services/api && npm run dev).
-//   macOS: fvm flutter test integration_test -d macos
+//   macOS: fvm flutter test integration_test/board_flow_test.dart -d macos
 //   web:   chromedriver --port=4444 &  then
 //          fvm flutter drive --driver test_driver/integration_test.dart --target integration_test/board_flow_test.dart -d web-server --browser-name chrome --headless
 import 'package:ai_kanban/core/api.dart';

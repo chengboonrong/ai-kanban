@@ -20,6 +20,7 @@ class App extends ConsumerWidget {
     ref.listen(outboxProvider, (_, _) {}); // keep the outbox (and its retry timer) alive on every screen
     return MaterialApp.router(
       title: 'AI Kanban',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.indigo),
       darkTheme: ThemeData(colorSchemeSeed: Colors.indigo, brightness: Brightness.dark),
       routerConfig: ref.watch(routerProvider),

@@ -22,6 +22,19 @@ The core design choice is keeping two things apart:
 - **Project management**: boards, tasks, approvals. Lives in the central backend, independent of any client.
 - **AI reasoning**: refining a brief into a spec. Runs on a worker with read-only repository access.
 
+## Preview
+
+What milestones 1–2 deliver so far: the board, quick capture and task history, here on macOS against the local API.
+AI refinement and GitHub sync are not built yet.
+
+![Demo: sign in, create a workspace and board, capture three tasks, drag one to In Progress, open its history](docs/media/demo.gif)
+
+[Watch the demo as MP4](docs/media/demo.mp4)
+
+| Board | Task with its history | Phone width |
+| --- | --- | --- |
+| <img src="docs/media/board.png" alt="Board with Backlog, Todo, In Progress and Done columns" width="380"> | <img src="docs/media/task-detail.png" alt="Task page with title, column, description and an activity list" width="380"> | <img src="docs/media/board-phone.png" alt="The same board at phone width, one column at a time" width="150"> |
+
 ## Surfaces
 
 | Surface | Role |
@@ -84,8 +97,11 @@ npm run dev                                  # API on http://localhost:8080, mig
 
 cd apps/flutter_app
 fvm flutter run -d macos                     # or: -d chrome
-fvm flutter test integration_test -d macos   # end-to-end flow against the running API
+fvm flutter test integration_test/board_flow_test.dart -d macos   # end-to-end flow against the running API
 ```
+
+To regenerate the screenshots and demo in `docs/media`, keep the API running and run
+`apps/flutter_app/tool/readme_media.sh` (macOS; drives the app with a `demo` account and needs ffmpeg).
 
 `npm run dev` starts the API with `AUTH_MODE=dev`: passwordless sign-in by login name, loopback only, refused when
 `NODE_ENV=production`. Real sign-in via GitHub replaces it. The app reaches the API at `http://localhost:8080`; override
