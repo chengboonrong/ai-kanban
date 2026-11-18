@@ -5,7 +5,7 @@ TypeScript backend and workers, OpenCode + DeepSeek agents.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/structure-dark.png">
-  <img alt="Product structure: Flutter app, central backend, local and cloud workers, GitHub and DeepSeek" src="docs/architecture/structure.png">
+  <img alt="Product structure: Flutter app, central backend (API, PostgreSQL queue, GitHub sync, orchestrator), GitHub, and your own machine running the worker with OpenCode or Claude Code, plus Orca to find checkouts" src="docs/architecture/structure.png">
 </picture>
 
 ## What it is
