@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
 import '../../core/models.dart';
+import '../../core/theme.dart';
 import '../../core/widgets.dart';
+import '../github/github.dart';
 
 /// The signed-in user's workers, refreshed every 5 s while the page shows them so states follow the machines
 /// (after a failed fetch too).
@@ -71,67 +73,123 @@ class WorkersPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final workers = ref.watch(workersProvider);
+    final theme = Theme.of(context);
+    final t = context.tokens;
+    final quiet = theme.textTheme.bodyMedium?.copyWith(color: t.muted);
+    // Same 880px ledger as the workspaces screen; the app bar shares the inset.
+    final side = ((MediaQuery.sizeOf(context).width - 880) / 2).clamp(
+      16.0,
+      double.infinity,
+    );
     return Scaffold(
-      appBar: AppBar(title: const Text('Workers')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _connect(context, ref),
-        icon: const Icon(Icons.add_link),
-        label: const Text('Connect a worker'),
+      appBar: AppBar(
+        title: const Text('Workers'),
+        // Line the title up with the content, past the 56px back button.
+        titleSpacing: (side - kToolbarHeight).clamp(16.0, double.infinity),
+        actions: [
+          FilledButton(
+            onPressed: () => _connect(context, ref),
+            child: const Text('Connect a worker'),
+          ),
+          SizedBox(width: side),
+        ],
       ),
       body: switch (workers) {
-        AsyncValue(:final value?) when value.isEmpty => const Center(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: Text(
-              'No workers yet. Connect the machine that has your checkouts and it refines your cards.',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ),
-        AsyncValue(:final value?) => ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+        AsyncValue(:final value?) when value.isEmpty => ListView(
+          padding: EdgeInsets.fromLTRB(side, 24, side, 24),
           children: [
-            for (final w in value)
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.computer_outlined),
-                  title: Text(w.name),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 4),
-                      _StateChip(worker: w),
-                      const SizedBox(height: 4),
-                      Text(
-                        w.repositories.isEmpty
-                            ? 'No repositories allowed yet'
-                            : w.repositories.join(', '),
-                      ),
-                    ],
-                  ),
-                  trailing: IconButton(
-                    tooltip: 'Remove ${w.name}',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => _remove(context, ref, w),
-                  ),
-                ),
-              ),
+            Text(
+              'No workers yet. Connect the machine that has your checkouts and it refines your cards.',
+              style: quiet,
+            ),
           ],
         ),
-        AsyncValue(:final error?) => Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(errorMessage(error), textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              FilledButton.tonal(
+        AsyncValue(:final value?) => ListView(
+          padding: EdgeInsets.fromLTRB(side, 24, side, 48),
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(border: Border(top: t.inkRule)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final w in value)
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border(bottom: t.hairline),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2, right: 12),
+                              child: Icon(
+                                Icons.computer_outlined,
+                                size: 20,
+                                color: t.muted,
+                              ),
+                            ),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    w.name,
+                                    style: theme.textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  _StateChip(worker: w),
+                                  const SizedBox(height: 6),
+                                  w.repositories.isEmpty
+                                      ? Text(
+                                          'No repositories allowed yet',
+                                          style: theme.textTheme.bodySmall,
+                                        )
+                                      : Text(
+                                          w.repositories.join(', '),
+                                          style: t.mono(
+                                            theme.textTheme.bodySmall!,
+                                          ),
+                                        ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Remove ${w.name}',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () => _remove(context, ref, w),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        AsyncValue(:final error?) => ListView(
+          padding: EdgeInsets.fromLTRB(side, 24, side, 24),
+          children: [
+            Text(
+              errorMessage(error),
+              style: theme.textTheme.bodyMedium?.copyWith(color: t.danger),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton(
                 onPressed: () => ref.invalidate(workersProvider),
                 child: const Text('Retry'),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-        _ => const Center(child: CircularProgressIndicator()),
+        _ => Align(
+          alignment: Alignment.topCenter,
+          child: LinearProgressIndicator(color: t.muted),
+        ),
       },
     );
   }
@@ -144,19 +202,15 @@ class _StateChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final seen = worker.lastSeenAt;
-    final (icon, label) = switch (worker.state) {
-      'online' => (Icons.check_circle_outline, 'Online'),
-      'busy' => (Icons.auto_awesome, 'Busy on "${worker.currentTask}"'),
+    final (tone, label) = switch (worker.state) {
+      'online' => (StatusTone.good, 'Online'),
+      'busy' => (StatusTone.active, 'Busy on "${worker.currentTask}"'),
       _ => (
-        Icons.cloud_off,
+        StatusTone.quiet,
         'Offline · ${seen == null ? 'never seen' : 'last seen ${_ago(seen)}'}',
       ),
     };
-    return Chip(
-      avatar: Icon(icon, size: 18),
-      label: Text(label, overflow: TextOverflow.ellipsis),
-      visualDensity: VisualDensity.compact,
-    );
+    return StatusChip(label: label, tone: tone);
   }
 }
 
@@ -195,8 +249,8 @@ class _PairingDialogState extends State<PairingDialog> {
           ),
           const SizedBox(height: 12),
           Material(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
+            color: context.tokens.paper3,
+            borderRadius: BorderRadius.circular(Tokens.radiusControl),
             child: Row(
               children: [
                 Expanded(
@@ -204,7 +258,7 @@ class _PairingDialogState extends State<PairingDialog> {
                     padding: const EdgeInsets.all(12),
                     child: SelectableText(
                       command,
-                      style: const TextStyle(fontFamily: 'monospace'),
+                      style: context.tokens.mono(theme.textTheme.bodyMedium!),
                     ),
                   ),
                 ),
@@ -229,9 +283,7 @@ class _PairingDialogState extends State<PairingDialog> {
           const SizedBox(height: 12),
           SelectableText(
             code,
-            style: theme.textTheme.headlineSmall?.copyWith(
-              fontFamily: 'monospace',
-            ),
+            style: context.tokens.mono(theme.textTheme.headlineSmall!),
           ),
           Text(
             'Works once. Expires at ${TimeOfDay.fromDateTime(widget.expiresAt).format(context)}.',
