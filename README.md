@@ -25,7 +25,7 @@ The core design choice is keeping two things apart:
 ## Preview
 
 What milestones 1–2 deliver: the board, quick capture and task history, here on macOS against the local API.
-Milestone 3 adds AI refinement with a local worker (below; not in the demo yet). GitHub sync is not built yet.
+Milestone 3 adds AI refinement with a local worker (screenshots further down). GitHub sync is not built yet.
 
 ![Demo: sign in, create a workspace and board, capture three tasks, drag one to In Progress, open its history](docs/media/demo.gif)
 
@@ -34,6 +34,19 @@ Milestone 3 adds AI refinement with a local worker (below; not in the demo yet).
 | Board | Task with its history | Phone width |
 | --- | --- | --- |
 | <img src="docs/media/board.png" alt="Board with Backlog, Todo, In Progress and Done columns" width="380"> | <img src="docs/media/task-detail.png" alt="Task page with title, column, description and an activity list" width="380"> | <img src="docs/media/board-phone.png" alt="The same board at phone width, one column at a time" width="150"> |
+
+### AI refinement (Milestone 3)
+
+A board connected to a repository, with cards in each refinement state, and the task page following a run and
+showing its spec. The run progress and spec here are sample data posted by a test worker, not real model output.
+
+| Board with refinement status | Run in progress | Spec ready for review |
+| --- | --- | --- |
+| <img src="docs/media/refine-board.png" alt="Board linked to acme/mobile-app; cards show Waiting for a worker, Refining, Spec ready for review, Spec approved and Refinement failed" width="380"> | <img src="docs/media/refine-running.png" alt="Task page with a progress bar, a Cancel button and the agent's latest reads and searches" width="380"> | <img src="docs/media/refine-spec.png" alt="Spec with title, version and commit, summary, readiness 72% and acceptance criteria" width="380"> |
+
+| Evidence and approval | Failed run | Spec at phone width |
+| --- | --- | --- |
+| <img src="docs/media/refine-evidence.png" alt="Requirements, open questions, suggested approach, evidence lines with verified and unverified marks, and an Approve spec button" width="380"> | <img src="docs/media/refine-failed.png" alt="The last refinement failed, with the error and a Refine with AI button" width="380"> | <img src="docs/media/refine-spec-phone.png" alt="The spec view at phone width" width="150"> |
 
 ## Surfaces
 
