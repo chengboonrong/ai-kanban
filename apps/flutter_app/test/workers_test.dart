@@ -11,11 +11,18 @@ class _FakeApi extends Api {
   _FakeApi(this.items) : super(Dio());
   List<Map<String, dynamic>> items;
   final deleted = <String>[];
+  var failures = 0; // the next calls that fail
+  var calls = 0;
 
   @override
-  Future<List<Worker>> workers() async => [
-    for (final w in items) Worker.fromJson(w),
-  ];
+  Future<List<Worker>> workers() async {
+    calls++;
+    if (failures > 0) {
+      failures--;
+      throw Exception('API down');
+    }
+    return [for (final w in items) Worker.fromJson(w)];
+  }
 
   @override
   Future<({String code, DateTime expiresAt})> pairWorker() async =>
@@ -47,6 +54,8 @@ Map<String, dynamic> _worker(
 Future<void> _pump(WidgetTester tester, _FakeApi api) async {
   await tester.pumpWidget(
     ProviderScope(
+      retry: (_, _) =>
+          null, // Riverpod's own retry off: what's left is the page's recheck
       overrides: [apiProvider.overrideWithValue(api)],
       child: const MaterialApp(home: WorkersPage()),
     ),
@@ -113,13 +122,24 @@ void main() {
 
     expect(find.byType(PairingDialog), findsOneWidget);
     expect(find.text('ABCDE-FGHJK'), findsOneWidget);
-    expect(find.text('npm run connect -- ABCDE-FGHJK'), findsOneWidget);
+    expect(
+      find.text("npm run connect -- ABCDE-FGHJK --api 'http://localhost:8080'"),
+      findsOneWidget,
+    );
     expect(find.text('Works once. Expires at 2:32 PM.'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Copy command'));
+    await tester.tap(find.text('Copy'));
     await tester.pump();
-    expect(copied, 'npm run connect -- ABCDE-FGHJK');
-    expect(find.text('Command copied'), findsOneWidget);
+    expect(
+      copied,
+      "npm run connect -- ABCDE-FGHJK --api 'http://localhost:8080'",
+    );
+    expect(
+      find.text('Copied'),
+      findsOneWidget,
+    ); // in the dialog, not under its barrier
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('Copy'), findsOneWidget);
 
     await tester.tap(find.text('Done'));
     await tester.pumpAndSettle();
@@ -130,18 +150,60 @@ void main() {
     final api = _FakeApi([_worker('1', 'online')]);
     await _pump(tester, api);
 
-    await tester.tap(find.byTooltip('Remove'));
+    await tester.tap(find.byTooltip('Remove Mac 1'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Remove Mac 1?'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(api.deleted, isEmpty);
 
-    await tester.tap(find.byTooltip('Remove'));
+    await tester.tap(find.byTooltip('Remove Mac 1'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
     await tester.pumpAndSettle();
     expect(api.deleted, ['1']);
     expect(find.text('Mac 1'), findsNothing);
+  });
+
+  testWidgets('warns that removing a busy worker fails its run', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      _FakeApi([
+        _worker('2', 'busy', currentTask: {'id': 't', 'title': 'Add login'}),
+      ]),
+    );
+    await tester.tap(find.byTooltip('Remove Mac 2'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Remove Mac 2? It stops getting jobs and the run it is on fails. '
+        'To use it again, connect it with a new code.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('keeps rechecking after a failure, and offers Retry', (
+    tester,
+  ) async {
+    final api = _FakeApi([_worker('1', 'online')])..failures = 2;
+    await _pump(tester, api);
+    expect(find.textContaining('API down'), findsOneWidget);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    await tester.pump();
+    expect(api.calls, 2); // still failing
+    expect(find.text('Retry'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 4));
+    expect(api.calls, 2);
+    // The recheck is armed after a failure too.
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.calls, 3);
+    expect(find.text('Mac 1'), findsOneWidget);
   });
 }

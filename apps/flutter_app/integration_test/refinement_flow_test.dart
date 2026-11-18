@@ -85,10 +85,10 @@ void main() {
         title,
       );
       await tester.testTextInput.receiveAction(TextInputAction.done);
-      await waitFor(find.text('No worker of it-$stamp is online'));
+      await waitFor(find.text('None of your workers is online'));
 
       await tester.tap(find.text(title));
-      await waitFor(find.text('No worker of it-$stamp is online'));
+      await waitFor(find.text('None of your workers is online'));
 
       // Play the worker: pair as this user (a code, then the public pair call, as `connect` does), claim the run,
       // report progress, then deliver a spec.

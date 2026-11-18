@@ -3,22 +3,40 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../core/widgets.dart';
+import '../auth/auth.dart';
 import '../boards/board_page.dart';
 
 /// Rechecked every 5 s while the run is queued, since why it waits changes as workers come and go.
+/// A failed fetch is rechecked too, so an outage doesn't stop it for good.
 final refinementProvider = FutureProvider.autoDispose
     .family<Refinement, String>((ref, taskId) async {
-      final r = await ref.watch(apiProvider).refinement(taskId);
-      if (r.run?.state == 'queued' && ref.mounted) {
-        final timer = Timer(const Duration(seconds: 5), ref.invalidateSelf);
-        ref.onDispose(timer.cancel);
+      Refinement? r;
+      try {
+        return r = await ref.watch(apiProvider).refinement(taskId);
+      } finally {
+        if (ref.mounted && (r == null || r.run?.state == 'queued')) {
+          final timer = Timer(const Duration(seconds: 5), ref.invalidateSelf);
+          ref.onDispose(timer.cancel);
+        }
       }
-      return r;
     });
+
+/// Next to a line saying a run waits on the viewer's own workers: where they can be checked.
+class WorkersButton extends StatelessWidget {
+  const WorkersButton({super.key});
+
+  @override
+  Widget build(BuildContext context) => TextButton(
+    style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+    onPressed: () => context.push('/workers'),
+    child: const Text('Workers'),
+  );
+}
 
 typedef RunProgress = ({String state, List<RunEvent> events});
 
@@ -128,7 +146,7 @@ class RefinementPanel extends ConsumerWidget {
                         run: run,
                         waiting: r.waiting,
                         repository: repository!,
-                        onDone: () => _refresh(ref),
+                        onChange: () => _refresh(ref),
                       ),
                     if (run != null && run.state == 'failed')
                       ListTile(
@@ -179,12 +197,14 @@ class _LiveRun extends ConsumerWidget {
     required this.run,
     required this.waiting,
     required this.repository,
-    required this.onDone,
+    required this.onChange,
   });
   final AgentRun run;
-  final String? waiting;
+  final Waiting? waiting;
   final String repository;
-  final VoidCallback onDone;
+
+  /// The run started or ended: the refinement (worker, agent, result) needs reloading.
+  final VoidCallback onChange;
 
   static String describe(RunEvent e) => switch (e.kind) {
     'inspecting' =>
@@ -199,34 +219,51 @@ class _LiveRun extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen(runEventsProvider(run.id), (_, next) {
+    ref.listen(runEventsProvider(run.id), (previous, next) {
       // Finished, or the watch broke (task deleted, access lost): reload the refinement either way. Server errors retry.
-      if (next.hasError) return onDone();
-      if (next.value case (state: final s, events: _)
-          when s != 'queued' && s != 'running') {
-        onDone();
+      if (next.hasError) return onChange();
+      final s = next.value?.state;
+      if (s != 'queued' && s != 'running' && s != null) return onChange();
+      // Just claimed: the worker's name and agent come with the refinement, so don't wait for its next recheck.
+      if (s == 'running' &&
+          run.state == 'queued' &&
+          previous?.value?.state != 'running') {
+        onChange();
       }
     });
     final progress = ref.watch(runEventsProvider(run.id)).value;
     final state = progress?.state ?? run.state;
     final events = progress?.events ?? const <RunEvent>[];
     final theme = Theme.of(context);
+    final viewer = ref.watch(authProvider)?.user.login;
+    final queued = state == 'queued';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const LinearProgressIndicator(),
         const SizedBox(height: 8),
-        Text(
-          state == 'queued'
-              ? waiting ??
-                    'Waiting for the worker of whoever connected $repository…'
-              : 'Refining against $repository with ${run.harnessLabel}${_on(run)}…',
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                queued
+                    ? waiting?.describe(
+                            viewer: viewer,
+                            repository: repository,
+                          ) ??
+                          'Waiting for the worker of whoever connected $repository…'
+                    : 'Refining against $repository with ${run.harnessLabel}${_on(run)}…',
+              ),
+            ),
+            if (queued && (waiting?.mine(viewer) ?? false))
+              const WorkersButton(),
+          ],
         ),
         if (run.attempt > 1)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              'Retrying (attempt ${run.attempt} of 3)${run.retryReason == null ? '' : ': ${run.retryReason}'}',
+              '${run.attempt >= 3 ? 'Last try' : 'Retrying'} (attempt ${run.attempt} of 3)${run.retryReason == null ? '' : ': ${run.retryReason}'}',
               style: theme.textTheme.bodySmall,
             ),
           ),

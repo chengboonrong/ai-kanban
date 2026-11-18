@@ -8,6 +8,7 @@ import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../core/widgets.dart';
 import '../agents/refinement.dart';
+import '../auth/auth.dart';
 import '../github/github.dart';
 import '../tasks/outbox.dart';
 
@@ -400,11 +401,7 @@ class _ColumnView extends ConsumerWidget {
                               thickness: 3,
                               color: theme.colorScheme.primary,
                             ),
-                          _TaskCard(
-                            boardId: board.id,
-                            task: task,
-                            width: cardWidth,
-                          ),
+                          _TaskCard(board: board, task: task, width: cardWidth),
                         ],
                       ),
                     ),
@@ -434,21 +431,24 @@ class _ColumnView extends ConsumerWidget {
 
 class _TaskCard extends ConsumerWidget {
   const _TaskCard({
-    required this.boardId,
+    required this.board,
     required this.task,
     required this.width,
   });
-  final String boardId;
+  final Board board;
   final Task task;
   final double width;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final waiting = task.refinement == 'queued'
-        ? ref.watch(refinementProvider(task.id)).value?.waiting
-        : null;
+    final viewer = ref.watch(authProvider)?.user.login;
+    final queued = task.refinement == 'queued';
     final status = switch (task.refinement) {
-      'queued' => (Icons.hourglass_empty, waiting ?? 'Waiting for a worker'),
+      'queued' => (
+        Icons.hourglass_empty,
+        board.waiting?.describe(viewer: viewer, repository: board.repository) ??
+            'Waiting for a worker',
+      ),
       'running' => (Icons.auto_awesome, 'Refining…'),
       'ready' => (Icons.rate_review_outlined, 'Spec ready for review'),
       'approved' => (Icons.verified_outlined, 'Spec approved'),
@@ -475,13 +475,15 @@ class _TaskCard extends ConsumerWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
+                        if (queued && (board.waiting?.mine(viewer) ?? false))
+                          const WorkersButton(),
                       ],
                     ),
                   if (task.github case final github?)
                     GitHubBadge(github: github),
                 ],
               ),
-        onTap: () => context.go('/boards/$boardId/tasks/${task.id}'),
+        onTap: () => context.go('/boards/${board.id}/tasks/${task.id}'),
       ),
     );
     final feedback = Material(

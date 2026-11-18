@@ -8,19 +8,26 @@ import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../core/widgets.dart';
 
-/// The signed-in user's workers, refreshed every 5 s while the page shows them so states follow the machines.
+/// The signed-in user's workers, refreshed every 5 s while the page shows them so states follow the machines
+/// (after a failed fetch too).
 final workersProvider = FutureProvider.autoDispose<List<Worker>>((ref) async {
-  final workers = await ref.watch(apiProvider).workers();
-  if (ref.mounted) {
-    final timer = Timer(const Duration(seconds: 5), ref.invalidateSelf);
-    ref.onDispose(timer.cancel);
+  try {
+    return await ref.watch(apiProvider).workers();
+  } finally {
+    if (ref.mounted) {
+      final timer = Timer(const Duration(seconds: 5), ref.invalidateSelf);
+      ref.onDispose(timer.cancel);
+    }
   }
-  return workers;
 });
 
-/// What the user pastes on their machine; the API URL only when it isn't the worker's default.
-String connectCommand(String code) =>
-    'npm run connect -- $code${apiUrl == 'http://localhost:8080' ? '' : ' --api $apiUrl'}';
+/// What the user pastes on their machine. Always names the API: without it `connect` reuses the one it saved last.
+String connectCommand(String code) {
+  final api = Uri.base
+      .resolve(apiUrl)
+      .toString(); // a web build may use a relative base such as /api
+  return "npm run connect -- $code --api '${api.replaceAll("'", r"'\''")}'";
+}
 
 String _ago(DateTime t) {
   final d = DateTime.now().difference(t);
@@ -42,7 +49,7 @@ class WorkersPage extends ConsumerWidget {
           builder: (_) =>
               PairingDialog(code: pairing.code, expiresAt: pairing.expiresAt),
         );
-        ref.invalidate(workersProvider);
+        if (context.mounted) ref.invalidate(workersProvider);
       });
 
   Future<void> _remove(BuildContext context, WidgetRef ref, Worker w) async {
@@ -57,7 +64,7 @@ class WorkersPage extends ConsumerWidget {
     }
     await runWithFeedback(context, () async {
       await ref.read(apiProvider).deleteWorker(w.id);
-      ref.invalidate(workersProvider);
+      if (context.mounted) ref.invalidate(workersProvider);
     });
   }
 
@@ -103,7 +110,7 @@ class WorkersPage extends ConsumerWidget {
                     ],
                   ),
                   trailing: IconButton(
-                    tooltip: 'Remove',
+                    tooltip: 'Remove ${w.name}',
                     icon: const Icon(Icons.delete_outline),
                     onPressed: () => _remove(context, ref, w),
                   ),
@@ -111,7 +118,19 @@ class WorkersPage extends ConsumerWidget {
               ),
           ],
         ),
-        AsyncValue(:final error?) => Center(child: Text(errorMessage(error))),
+        AsyncValue(:final error?) => Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(errorMessage(error), textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              FilledButton.tonal(
+                onPressed: () => ref.invalidate(workersProvider),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
         _ => const Center(child: CircularProgressIndicator()),
       },
     );
@@ -142,14 +161,28 @@ class _StateChip extends StatelessWidget {
 }
 
 /// Shows a one-time code and the command that trades it for a worker token.
-class PairingDialog extends StatelessWidget {
+class PairingDialog extends StatefulWidget {
   const PairingDialog({super.key, required this.code, required this.expiresAt});
   final String code;
   final DateTime expiresAt;
 
   @override
+  State<PairingDialog> createState() => _PairingDialogState();
+}
+
+class _PairingDialogState extends State<PairingDialog> {
+  Timer? _copied; // while set, the copy button says it worked; a SnackBar would sit under the dialog's barrier
+
+  @override
+  void dispose() {
+    _copied?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final code = widget.code;
     final command = connectCommand(code);
     return AlertDialog(
       title: const Text('Connect a worker'),
@@ -175,16 +208,19 @@ class PairingDialog extends StatelessWidget {
                     ),
                   ),
                 ),
-                IconButton(
-                  tooltip: 'Copy command',
-                  icon: const Icon(Icons.copy),
+                TextButton.icon(
+                  icon: Icon(_copied == null ? Icons.copy : Icons.check),
+                  label: Text(_copied == null ? 'Copy' : 'Copied'),
                   onPressed: () async {
                     await Clipboard.setData(ClipboardData(text: command));
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Command copied')),
-                      );
-                    }
+                    if (!mounted) return;
+                    _copied?.cancel();
+                    setState(
+                      () => _copied = Timer(
+                        const Duration(seconds: 2),
+                        () => setState(() => _copied = null),
+                      ),
+                    );
                   },
                 ),
               ],
@@ -198,7 +234,7 @@ class PairingDialog extends StatelessWidget {
             ),
           ),
           Text(
-            'Works once. Expires at ${TimeOfDay.fromDateTime(expiresAt).format(context)}.',
+            'Works once. Expires at ${TimeOfDay.fromDateTime(widget.expiresAt).format(context)}.',
             style: theme.textTheme.bodySmall,
           ),
         ],
