@@ -6,7 +6,7 @@ An AI-native project management system that turns a short task brief into a deta
 
 **Scope:** the product refines tasks into specs. It never writes, builds, runs or pushes code — implementation stays with people (or whatever tools they choose) on GitHub.
 
-The most important decision is to separate **project management** from **AI reasoning**. A user can create a task on their iPhone, have an agent analyze the repository on their Mac or a cloud server, approve the spec, and follow the resulting GitHub issue from any device.
+The most important decision is to separate **project management** from **AI reasoning**. A user can create a task on their iPhone, have an agent analyze the repository on their own computer, approve the spec, and follow the resulting GitHub issue from any device.
 
 ## 1. Product vision
 
@@ -17,8 +17,7 @@ The most important decision is to separate **project management** from **AI reas
 | Mobile | Capture + approvals |
 
 - **Central backend & orchestrator** — authentication, boards, tasks, scheduling, synchronization.
-- **Local worker** (Mac / Windows / Linux) — local repos + installed agents.
-- **Remote worker** (VPS / Docker / cloud) — isolated repository workspaces.
+- **Worker** (your own Mac; Windows / Linux run it by hand) — your checkouts + your installed agents (OpenCode, or Claude Code). There is no hosted worker: repository code is read only on a machine its owner paired.
 - **GitHub** — repository, issues, pull requests, CI, reviews.
 
 ### Key principles
@@ -26,7 +25,7 @@ The most important decision is to separate **project management** from **AI reas
 1. **One Flutter application** — shared features and logic for web, desktop and mobile, with adaptive UIs.
 2. **Backend as source of truth** — tasks, agent runs, approvals and board state exist independently of any client.
 3. **Pluggable agent runtime** — Claude Code, Codex, OpenCode or other adapters can do the refinement.
-4. **Hybrid execution** — jobs run locally or remotely depending on user preference and worker capability.
+4. **Your machine does the reading** — each person pairs their own worker; a board's runs go to the workers of whoever connected its repository.
 5. **GitHub remains authoritative** — GitHub owns issues, PRs, review decisions and CI results.
 6. **Recoverable operations** — agent jobs and webhook sync survive disconnections, retries and restarts.
 
@@ -44,7 +43,6 @@ The most important decision is to separate **project management** from **AI reas
 | Queue | PostgreSQL (`FOR UPDATE SKIP LOCKED`); BullMQ + Redis when volume needs it | Durable queued work and retries |
 | AI control plane | TypeScript | Agent routing and job orchestration |
 | Local worker | TypeScript first (Rust later, if justified) | Process supervision and agent execution |
-| Remote worker | Containerized runtime | Remote repository analysis and agent jobs |
 | Agent interfaces | Adapter-based CLI/API integration | Codex, Claude Code, OpenCode |
 | GitHub | GitHub App + REST/GraphQL + webhooks | Repo access, issues and PR sync |
 | Live events | Long-polling for run progress (Dio can't stream responses on web); SSE for board-wide updates later | Job progress and board updates |
@@ -74,7 +72,7 @@ Agents are **read-only**. They read the repository and write specs; they never e
 | Default model | `opencode/deepseek-v4.1-flash-free` |
 | Free fallback | None by default: OpenCode withdrew `glm-5.3-flash-free` (November 2026); add one in the worker's `models` |
 | Paid models (opt-in) | `deepseek-flash` (V4.1 Flash), `deepseek-v4-pro` via the DeepSeek API |
-| Execution | Local / Remote / Auto |
+| Execution | The connector's own workers (no hosted worker) |
 | Integration | OpenCode SDK |
 
 Free models by default, so a new user can run refinement without buying API credits. Both free defaults come from providers that, per OpenCode's Zen docs (checked 2026-11-18), keep no data and don't train on it. Repository code goes to the model, so don't make a free model that retains data or trains on it (e.g. `big-pickle`, `iceman-free`) a default. Zen says free models are available "for a limited time": the model id is configuration, and the worker must fall back, or fail with a clear message, when a model is withdrawn. Free-tier chat models are only served through OpenCode itself, which suits this design. Whether a worker needs an OpenCode Zen sign-in for free models is still unverified (the dev machine already had a Zen credential).
@@ -83,28 +81,19 @@ DeepSeek API ids, checked against DeepSeek's pricing page on 2026-11-18: `deepse
 
 Avoid the legacy `deepseek-chat` / `deepseek-reasoner` identifiers (scheduled for discontinuation July 2026). OpenCode's official TypeScript SDK embeds its server, creates sessions, issues prompts and subscribes to events — use it rather than scraping CLI output.
 
-### Worker topology
+### Workers you run
 
-The **agent orchestrator** assigns jobs, enforces policy and manages leases. Both the **local worker** (desktop, local checkout) and **cloud worker** (container, isolated clone) run the OpenCode SDK against **OpenCode's free models** by default, or the **DeepSeek API** with per-workspace credentials and budgets.
+There is no cloud worker (owner decision, Milestone 5): each person runs the worker on their own computer and pairs it with their account. The **orchestrator** in the API queues runs, hands each to a worker of whoever connected the board's repository, and manages leases.
 
-### Local vs remote
-
-| Capability | Local worker | Remote worker |
-| --- | --- | --- |
-| OpenCode harness | Yes | Yes |
-| Default model | Yes | Yes |
-| Analyze repository (read-only) | Local checkout | Isolated clone |
-| Survive Flutter UI closing | Yes, if daemon keeps running | Yes |
-| Work while computer is off | No | Yes |
-| Authentication | Device registration + short-lived job credentials | Workload identity + GitHub App tokens |
-
-Use explicit **worker leases**: a disconnected worker must not cause the same refinement to run twice or produce duplicate spec versions.
-
-`Auto` execution picks a compatible, healthy local worker first and falls back to cloud only if the task's data-access and cost policies allow. A running refinement job is never silently migrated between workers.
+- **Pairing.** The app's Workers page shows a one-time code (10 minutes, single use); `connect <code>` on the machine trades it for the worker's own token, stored in `~/.config/ai-kanban/worker.json` (mode 0600). The account's sign-in never reaches the worker.
+- **Which checkouts.** `checkouts` lists the GitHub checkouts Orca knows about (`orca repo list --json`) and asks before allowing each; `allow <owner/name> <path>` names one by hand. A worker only claims runs for repositories it lists.
+- **Staying up.** `service install` (macOS) registers a LaunchAgent that starts at login and restarts the worker if it crashes, so a run finishes after the Flutter window closes. While a job runs the worker holds `caffeinate -i`, because idle sleep would stop it.
+- **Leases.** A claim leases the run for 90 seconds; every event batch (a heartbeat every 5 s) renews it, never past 20 minutes from the start. A sweeper in the API fails a lapsed run and queues a retry, 3 attempts in all. A worker stopping on purpose (SIGTERM) hands its run back for an immediate retry, and a worker that restarts after a crash gets its run back at its first claim. A stale worker's late events and result are refused (409), and a run can produce at most one spec. Not retried: failures the worker reports (model errors, free limits), cancels, the 20-minute cap and a board moved to another repository. A running job is never moved to another worker while it is alive.
+- **Status.** The app shows each worker as online (seen in the last 30 s), busy (on a task) or offline, and a queued card says why it waits: no worker of the connector online, none of their workers lists the repository, or all are busy.
 
 ## 5. OpenCode integration contract
 
-One adapter, reused by local and cloud workers (internal contract, not literal SDK methods):
+One adapter contract per harness (internal contract, not literal SDK methods):
 
 ```
 AgentHarness
@@ -131,6 +120,8 @@ agent_run
 One OpenCode agent policy, the **Refiner**: read-only repository access (read, list, search); returns structured requirements, acceptance criteria, evidence citations, ambiguities and a suggested approach. File edits, shell commands and Git writes are denied.
 
 As built (Milestone 3): the Refiner's permissions deny everything except `read`, `list`, `glob` and `grep`, and `external_directory` is denied, so it can't read outside the folder it is given; nothing is set to `ask`, which would hang a headless run. The worker starts OpenCode with `OPENCODE_DISABLE_PROJECT_CONFIG`, `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_EXTERNAL_SKILLS` and `OPENCODE_PURE`, so the repository's own `opencode.json`, `AGENTS.md`, `CLAUDE.md`, skills and plugins never load, and with a private `XDG_CONFIG_HOME`, so the machine owner's personal OpenCode setup (MCP servers, plugins, instructions) doesn't reach the Refiner either. Provider sign-ins still come from OpenCode's data directory. What the Refiner can see: the worker extracts the checkout's current commit (`git archive` from a shared clone, with no filter drivers configured) into a temporary folder and runs the agent there, so it reads committed files only, as on GitHub: git-crypt files stay encrypted and LFS files stay pointers. Untracked and ignored files (`.env`, `.npmrc`, build output), `.git` and uncommitted changes are never in that folder; the run reports the commit and whether uncommitted changes were left out. The worker refuses a commit containing symlinks that point outside it. Connecting a repository to a board shares your checkout of it with that board: runs there are claimed only by workers of whoever connected it, so another member can't point a board at your repository and have your worker read it for them. If that person leaves the workspace, the board's runs wait until someone connects the repository again. The structured output schema is `packages/contracts/refined-spec.schema.json`; the API validates every spec against it again, and the worker marks each evidence citation verified only if those lines exist in the exported commit.
+
+**Claude Code as the Refiner** (optional per worker, `"refiner": "claude"` in `worker.json`; Milestone 5). The worker runs `claude -p --restricted --strict-mcp-config --tools Read,Glob,Grep --disable-slash-commands --no-session-persistence --settings '{"disableAllHooks":true}' --json-schema <schema>` in the same exported folder. Checked with Claude Code 2.1.325 and a normal sign-in (no API key needed): only Read, Glob and Grep are available, reads outside the folder are refused, and neither the folder's nor the user's `CLAUDE.md`, `AGENTS.md`, settings, skills, hooks or MCP servers load. The worker refuses to run if Claude Code starts with any other tool or an MCP server, so a future version that changes this fails closed. It runs on the machine owner's Claude plan, and repository content goes to Anthropic under that account's terms. It is not run through Orca: Orca can't pass these flags, so an Orca-launched agent would load the user's own MCP servers, skills and plugins, and Codex can't be pinned read-only from a project folder at all.
 
 Keep provider credentials (OpenCode Zen, DeepSeek) on the executing worker or behind a controlled inference gateway. **Never embed API secrets in Flutter builds.**
 
@@ -180,7 +171,7 @@ repository is connected. Until sign-in with GitHub verifies who may use a reposi
 
 ### Repository security
 
-Read-only access throughout: GitHub App permissions limited to contents read plus issues write, and an isolated clone per cloud job. Repository content is data, not instructions — the refiner never executes repository instructions, installs dependencies or runs scripts. Cloud: short-lived containers with network and resource limits. Local: a visible permission policy listing which repositories a worker may read.
+Read-only access throughout: GitHub App permissions limited to issues write plus read access to contents (commit data on linked PRs), pull requests, checks and statuses; nothing clones repositories. Repository content is data, not instructions — the refiner never executes repository instructions, installs dependencies or runs scripts. Workers: a visible list of which repositories each may read, confirmed per repository.
 
 ## 7. Monorepo structure
 
@@ -205,7 +196,7 @@ The desktop Flutter app registers and talks to the worker over loopback or authe
 2. **Kanban core** — create/edit tasks, configurable columns, activity history, local task caching, adaptive layouts.
 3. **OpenCode + DeepSeek** — worker registration, repo inspection of a local checkout, AI refinement, structured outputs, streaming run events, approval screen.
 4. **GitHub sync** — GitHub App installation, issue creation, idempotency, webhook ingestion, PR tracking, review and CI status.
-5. **Hybrid workers** — persistent local worker, remote container worker, leases, cancellation, retry rules, execution target selection.
+5. **Your own workers** — pairing from the app, persistent local worker (launchd), leases, retry rules, worker status, Orca checkout discovery, Claude Code as an optional Refiner. (A remote/cloud worker was dropped: users bind their own machine.)
 6. **Hardening & release** — permissions, read-only enforcement, failure recovery, reconciliation, package signing, tests, end-to-end validation.
 
 First usable release: **macOS desktop + web**, with iOS/Android targets kept in the project from day one. Mobile MVP = task capture, spec approval, agent monitoring, PR notifications.
@@ -217,7 +208,7 @@ First usable release: **macOS desktop + web**, with iOS/Android targets kept in 
 - The agent produces a repository-grounded spec with traceable evidence.
 - The user can approve it and create exactly one GitHub issue.
 - A linked PR appears automatically with its current reviews and CI state.
-- A remote worker can process a job while the user's laptop is offline.
+- A run whose worker vanishes is failed within about two minutes and retried, never producing two specs.
 - A local worker can finish a job after the Flutter window closes, provided its service keeps running.
 - Duplicate webhooks and failed retries don't corrupt task state or create duplicate issues.
 
@@ -233,10 +224,11 @@ agent:
   fallback_models: []
 
 execution:
-  default_target: auto
-  preferred_target: local
-  cloud_fallback: true
+  target: own_workers   # no hosted worker
   parallel_jobs_per_worker: 1
+  lease_seconds: 90
+  max_run_minutes: 20
+  attempts: 3
 
 refinement:
   auto_start: true
@@ -244,4 +236,4 @@ refinement:
   repository_access: read_only
 ```
 
-**Decision:** Flutter client, TypeScript backend and worker services, OpenCode as the sole default harness, OpenCode's free DeepSeek V4.1 Flash as the default model (paid DeepSeek API optional). Local and cloud workers run the same read-only agent contract.
+**Decision:** Flutter client, TypeScript backend and worker services, OpenCode as the sole default harness, OpenCode's free DeepSeek V4.1 Flash as the default model (paid DeepSeek API optional). Workers run on their owners' machines under the same read-only agent contract, with Claude Code as an optional Refiner.

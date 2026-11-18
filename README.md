@@ -11,7 +11,7 @@ TypeScript backend and workers, OpenCode + DeepSeek agents.
 ## What it is
 
 A project board that does the spec-writing legwork. Capture a five-word task on your phone; an agent reads your
-repository on your Mac or a cloud worker and turns the brief into a detailed spec: requirements, acceptance criteria,
+repository on your own Mac and turns the brief into a detailed spec: requirements, acceptance criteria,
 the files and code it's grounded in, open questions, and a suggested approach. Once you approve, it opens exactly one
 GitHub issue. PRs that people link to that issue, with their reviews and CI status, flow back onto the card.
 
@@ -26,7 +26,9 @@ The core design choice is keeping two things apart:
 
 What milestones 1–2 deliver: the board, quick capture and task history, here on macOS against the local API.
 Milestone 3 adds AI refinement with a local worker (screenshots further down). Milestone 4 files the approved spec as a
-GitHub issue and follows the PRs linked to it; it runs once you register a GitHub App (see below).
+GitHub issue and follows the PRs linked to it; it runs once you register a GitHub App (see below). Milestone 5 lets you pair
+your own machine as a worker from the app, keeps it running in the background, and retries runs a vanished worker
+left behind.
 
 ![Demo: sign in, create a workspace and board, capture three tasks, drag one to In Progress, open its history](docs/media/demo.gif)
 
@@ -62,8 +64,8 @@ All three are one Flutter app with adaptive layouts.
 ## How a task flows
 
 1. **Capture**: the app saves the task and submits it with an idempotency key, so retries never duplicate a card.
-2. **Refine**: the orchestrator leases a refinement job to a healthy worker (local first, cloud if policy allows).
-   OpenCode with DeepSeek reads a pinned commit and returns a versioned spec with evidence and open questions.
+2. **Refine**: the orchestrator leases a refinement job to a worker of whoever connected the board's repository, on
+   their own machine (there is no hosted worker). OpenCode with DeepSeek, or optionally Claude Code, reads a pinned commit and returns a versioned spec with evidence and open questions.
 3. **Approve**: you review the spec, answer its open questions or ask for another pass; approval creates one GitHub
    issue through the GitHub App.
 4. **Track**: GitHub webhooks are verified, deduplicated and reconciled; GitHub's review decision and CI status land on
@@ -86,14 +88,14 @@ All three are one Flutter app with adaptive layouts.
 | --- | --- |
 | Client | Flutter, Riverpod, GoRouter, Dio, Drift |
 | Backend | TypeScript, Fastify, PostgreSQL (also the job queue for now) |
-| Workers | TypeScript daemon (local) and containers (cloud), same read-only agent contract |
-| Agents | OpenCode SDK; OpenCode's free DeepSeek V4.1 Flash by default, paid DeepSeek API optional |
+| Workers | TypeScript daemon on your own machine (a macOS LaunchAgent), paired from the app |
+| Agents | OpenCode SDK; OpenCode's free DeepSeek V4.1 Flash by default, paid DeepSeek API or Claude Code optional |
 | GitHub | GitHub App, REST/GraphQL, webhooks |
 | Telemetry | OpenTelemetry |
 
 ## Status
 
-Early build. Milestones: foundation → Kanban core → OpenCode + DeepSeek refinement → GitHub sync → hybrid workers →
+Early build. Milestones: foundation → Kanban core → OpenCode + DeepSeek refinement → GitHub sync → your own workers →
 hardening. The first release targets macOS desktop and web.
 
 Architecture: [docs/architecture/overview.md](docs/architecture/overview.md)
@@ -131,10 +133,13 @@ until it resets, or you set paid models in `worker.json`.
 cd services/worker
 npm install
 npm test
-npm run register -- --login <your-login>        # dev sign-in; saves a worker token to ~/.config/ai-kanban/worker.json
-npm run allow -- owner/name ~/code/name         # each repository this worker may read (it checks the git remote)
+npm run connect -- <code>                       # the code from the app's Workers page; saves ~/.config/ai-kanban/worker.json
+npm run checkouts                               # pick repositories from Orca's list (or: npm run allow -- owner/name ~/code/name)
 npm start                                       # polls the API and refines queued cards
+npm run service -- install                      # or keep it running in the background (macOS LaunchAgent)
 ```
+
+Pairing, the background service, the Claude Code option and troubleshooting: [docs/setup/worker.md](docs/setup/worker.md).
 
 In the app, connect the board to the same `owner/name` (the link icon on the board). Every new card on that board is
 then refined, by your worker, including cards teammates add (connecting a repository shares your checkout of it with
