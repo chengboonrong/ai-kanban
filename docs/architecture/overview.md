@@ -80,7 +80,7 @@ Avoid the legacy `deepseek-chat` / `deepseek-reasoner` identifiers (scheduled fo
 
 ### Worker topology
 
-The **agent orchestrator** assigns jobs, enforces policy and manages leases. Both the **local worker** (desktop, local Git worktree) and **cloud worker** (container, isolated Git worktree) run the OpenCode SDK against the **DeepSeek API** with per-workspace credentials and budgets.
+The **agent orchestrator** assigns jobs, enforces policy and manages leases. Both the **local worker** (desktop, local checkout) and **cloud worker** (container, isolated clone) run the OpenCode SDK against the **DeepSeek API** with per-workspace credentials and budgets.
 
 ### Local vs remote
 
