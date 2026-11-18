@@ -159,6 +159,25 @@ Clear ownership rather than trying to make GitHub and the Kanban DB identical:
 
 The webhook receiver runs in the central backend, never only in a local desktop worker.
 
+As built (Milestone 4): approval checks the board still points at the repository the spec was refined against and
+queues one `github_issues` row in the same transaction. A loop in the API claims due rows with a lease committed on its
+own, so no transaction is open across a call to GitHub; it files the issue as the app's installation (title from the
+spec, body built from it with `@` mentions neutralised, capped at 60,000 characters, starting with a hidden
+`ai-kanban:task` marker). Every attempt after the first lists the repository's recent issues and adopts one the app
+created with that marker; the lease is renewed just before each create and outlasts it, and the attempt count fences
+every write, so a lost response or a crash mid-request never creates a second issue. After a rate limit the client
+sends nothing until GitHub's reset. Webhooks arrive on a
+separate listener (port 8081) that verifies the HMAC signature on the raw body and records the delivery id and its
+effects in one transaction, so redeliveries are no-ops and a failed delivery can be redelivered by hand (GitHub doesn't retry). Events only mark PRs
+dirty (a sequence number); the loop then reads each dirty PR's current state with one GraphQL query (state, review
+decision, CI rollup, closing issue references) and relinks it, which makes out-of-order and duplicate events harmless; issue open/closed events apply only when newer
+than the last one applied.
+A PR links to a task when it closes the task's issue in the same repository or its branch (not a fork's) starts with
+`<number>-`; plain mentions don't link. The app refreshes the task page every 15 s and the board every 30 s while issues are queued
+or open; SSE comes later. Deferred: recovering webhooks missed while the receiver was unreachable (Milestone 6
+reconciliation), updating the issue when a later spec version is approved, and checking the app is installed when a
+repository is connected. Until sign-in with GitHub verifies who may use a repository, the API must stay on localhost.
+
 ### Repository security
 
 Read-only access throughout: GitHub App permissions limited to contents read plus issues write, and an isolated clone per cloud job. Repository content is data, not instructions — the refiner never executes repository instructions, installs dependencies or runs scripts. Cloud: short-lived containers with network and resource limits. Local: a visible permission policy listing which repositories a worker may read.

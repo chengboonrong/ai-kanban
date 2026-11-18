@@ -25,7 +25,8 @@ The core design choice is keeping two things apart:
 ## Preview
 
 What milestones 1–2 deliver: the board, quick capture and task history, here on macOS against the local API.
-Milestone 3 adds AI refinement with a local worker (screenshots further down). GitHub sync is not built yet.
+Milestone 3 adds AI refinement with a local worker (screenshots further down). Milestone 4 files the approved spec as a
+GitHub issue and follows the PRs linked to it; it runs once you register a GitHub App (see below).
 
 ![Demo: sign in, create a workspace and board, capture three tasks, drag one to In Progress, open its history](docs/media/demo.gif)
 
@@ -65,7 +66,8 @@ All three are one Flutter app with adaptive layouts.
    OpenCode with DeepSeek reads a pinned commit and returns a versioned spec with evidence and open questions.
 3. **Approve**: you review the spec, answer its open questions or ask for another pass; approval creates one GitHub
    issue through the GitHub App.
-4. **Track**: GitHub webhooks are verified, deduplicated and reconciled; reviews and CI land on the card over SSE.
+4. **Track**: GitHub webhooks are verified, deduplicated and reconciled; GitHub's review decision and CI status land on
+   the card (the app refreshes while issues are queued or open; SSE later).
    Your column choice stays yours, separate from GitHub's status.
 
 ## Principles
@@ -140,6 +142,15 @@ that board). The task page shows the run live and the resulting spec, which you 
 agent reads a copy of the checkout's current commit, so untracked files such as `.env`, `.git` and uncommitted changes
 never reach it. It can only read, list, glob and grep there, and ignores the repository's own OpenCode config,
 `AGENTS.md` and plugins, as well as your personal OpenCode setup. Models are set in `worker.json`.
+
+### GitHub issues and pull requests
+
+Approving a spec queues one GitHub issue, filed by a GitHub App from the spec. PRs that close that issue ("Closes #12",
+or linked in the PR's Development sidebar, which shows with the PR's next update) or whose branch in the repository
+starts with `12-` show on the card and the task page with GitHub's review decision and CI status. Register a development app and a webhook tunnel with
+[docs/setup/github-app.md](docs/setup/github-app.md); without it the API logs `GitHub sync off` and issues stay
+queued. Webhooks arrive on a separate port (8081) so the tunnel exposes nothing else. Until sign-in with GitHub exists,
+keep the API on localhost: anyone who can reach it could file issues in any repository the app is installed on.
 
 To regenerate the screenshots and demo in `docs/media`, keep the API running and run
 `apps/flutter_app/tool/readme_media.sh` (macOS; drives the app with a `demo` account and needs ffmpeg).
