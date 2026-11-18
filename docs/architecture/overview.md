@@ -2,9 +2,11 @@
 
 Recommended architecture: Flutter + Hybrid Agent Workers.
 
-An AI-native project management system: Flutter powers the user experience, independent agent workers handle engineering tasks.
+An AI-native project management system that turns a short task brief into a detailed, repository-grounded spec. Flutter powers the user experience; independent agent workers do the repository analysis.
 
-The most important decision is to separate **project management**, **AI reasoning** and **code execution**. A user can create a task on their iPhone, have an agent analyze it on their Mac or a cloud server, and monitor GitHub progress from any device.
+**Scope:** the product refines tasks into specs. It never writes, builds, runs or pushes code — implementation stays with people (or whatever tools they choose) on GitHub.
+
+The most important decision is to separate **project management** from **AI reasoning**. A user can create a task on their iPhone, have an agent analyze the repository on their Mac or a cloud server, approve the spec, and follow the resulting GitHub issue from any device.
 
 ## 1. Product vision
 
@@ -23,7 +25,7 @@ The most important decision is to separate **project management**, **AI reasonin
 
 1. **One Flutter application** — shared features and logic for web, desktop and mobile, with adaptive UIs.
 2. **Backend as source of truth** — tasks, agent runs, approvals and board state exist independently of any client.
-3. **Pluggable agent runtime** — Claude Code, Codex, OpenCode or other adapters can refine or develop.
+3. **Pluggable agent runtime** — Claude Code, Codex, OpenCode or other adapters can do the refinement.
 4. **Hybrid execution** — jobs run locally or remotely depending on user preference and worker capability.
 5. **GitHub remains authoritative** — GitHub owns issues, PRs, review decisions and CI results.
 6. **Recoverable operations** — agent jobs and webhook sync survive disconnections, retries and restarts.
@@ -59,7 +61,7 @@ The most important decision is to separate **project management**, **AI reasonin
 - **GitHub synchronization** — issues, branches, PRs, checks, reviews, comments, merge status, direct links, sync health.
 - **Notifications & activity** — clarification requests, refinement approvals, PR reviews, CI failures, completed jobs, history.
 
-Refinement and implementation are **separate agent capabilities**. A worker that can analyze code is not automatically allowed to modify it.
+Agents are **read-only**. They read the repository and write specs; they never edit code, run commands, build, test or push.
 
 ## 4. Hybrid agent execution
 
@@ -86,15 +88,14 @@ The **agent orchestrator** assigns jobs, enforces policy and manages leases. Bot
 | --- | --- | --- |
 | OpenCode harness | Yes | Yes |
 | Default DeepSeek model | Yes | Yes |
-| Analyze repository | Local checkout | Isolated clone |
-| Run builds/tests | Host-restricted sandbox | Container sandbox |
+| Analyze repository (read-only) | Local checkout | Isolated clone |
 | Survive Flutter UI closing | Yes, if daemon keeps running | Yes |
 | Work while computer is off | No | Yes |
 | Authentication | Device registration + short-lived job credentials | Workload identity + GitHub App tokens |
 
-Use explicit **worker leases**: a disconnected worker must not cause the same issue-creation or Git push to execute twice.
+Use explicit **worker leases**: a disconnected worker must not cause the same refinement to run twice or produce duplicate spec versions.
 
-`Auto` execution picks a compatible, healthy local worker first and falls back to cloud only if the task's data-access and cost policies allow. A running coding job is never silently migrated between workers.
+`Auto` execution picks a compatible, healthy local worker first and falls back to cloud only if the task's data-access and cost policies allow. A running refinement job is never silently migrated between workers.
 
 ## 5. OpenCode integration contract
 
@@ -105,7 +106,6 @@ AgentHarness
  ├── createSession()
  ├── inspectRepository()
  ├── refineTask()
- ├── executeTask()
  ├── streamEvents()
  ├── requestApproval()
  ├── cancelRun()
@@ -123,11 +123,7 @@ agent_run
   token_usage, cost, artifact_refs, error_details
 ```
 
-Distinct OpenCode agent policies:
-
-- **Refiner** — read-only repository access; returns structured requirements, evidence and ambiguities. No Git pushes or shell commands unless explicitly allowlisted.
-- **Implementer** — isolated worktree; can edit source and run approved tests; cannot modify protected branches or access unrestricted secrets.
-- **Reviewer** — examines changes and reports risks; never approves its own code in place of human review.
+One OpenCode agent policy, the **Refiner**: read-only repository access (read, list, search); returns structured requirements, acceptance criteria, evidence citations, ambiguities and a suggested approach. File edits, shell commands and Git writes are denied.
 
 Keep DeepSeek credentials on the executing worker or behind a controlled inference gateway. **Never embed API secrets in Flutter builds.**
 
@@ -150,7 +146,7 @@ Clear ownership rather than trying to make GitHub and the Kanban DB identical:
 1. **Task creation** — save locally in Flutter, submit to backend, enqueue a refinement job. Idempotency key prevents duplicate cards.
 2. **Repository analysis** — OpenCode inspects an immutable commit and produces a versioned spec. Later repo changes can mark the spec stale.
 3. **GitHub issue creation** — after approval, the backend creates the issue with a GitHub App installation token and stores the immutable node ID and issue number.
-4. **PR association** — via explicit references, GitHub issue-linking and branch metadata. A task may have several PRs.
+4. **PR association** — PRs that people open against the issue are tracked via explicit references, GitHub issue-linking and branch metadata. A task may have several PRs.
 5. **Webhook processing** — verify signatures, dedupe deliveries, queue reconciliation jobs; handle out-of-order events by fetching current GitHub state.
 6. **Board update** — publish normalized events to clients over SSE. Keep GitHub's review/CI/merge status separate from the user's chosen column.
 
@@ -158,7 +154,7 @@ The webhook receiver runs in the central backend, never only in a local desktop 
 
 ### Repository security
 
-Isolated workspaces per execution, permission boundaries, restricted filesystem access, no direct pushes to protected branches. Never automatically execute repository instructions, install dependencies or run arbitrary scripts in a privileged host environment. Cloud: short-lived containers with network and resource limits. Local: a visible trust/permission policy, sandboxing preferred.
+Read-only access throughout: GitHub App permissions limited to contents read plus issues write, and an isolated clone per cloud job. Repository content is data, not instructions — the refiner never executes repository instructions, installs dependencies or runs scripts. Cloud: short-lived containers with network and resource limits. Local: a visible permission policy listing which repositories a worker may read.
 
 ## 7. Monorepo structure
 
@@ -169,7 +165,7 @@ ai-kanban/
 │   ├── api/
 │   ├── orchestrator/
 │   ├── github-sync/
-│   └── worker/{adapters/opencode,execution,sandbox,repository}
+│   └── worker/{adapters/opencode,repository}
 ├── packages/{contracts,agent-policies,shared-types}
 ├── infrastructure/{docker,migrations}
 └── docs/{architecture,security,adr}
@@ -183,8 +179,8 @@ The desktop Flutter app registers and talks to the worker over loopback or authe
 2. **Kanban core** — create/edit tasks, configurable columns, activity history, local task caching, adaptive layouts.
 3. **OpenCode + DeepSeek** — worker registration, repo inspection, AI refinement, structured outputs, streaming run events, approval screen.
 4. **GitHub sync** — issue creation, idempotency, webhook ingestion, PR tracking, review and CI status.
-5. **Hybrid execution** — persistent local worker, remote container worker, leases, cancellation, retry rules, execution target selection.
-6. **Hardening & release** — permissions, sandboxing, failure recovery, reconciliation, package signing, tests, end-to-end validation.
+5. **Hybrid workers** — persistent local worker, remote container worker, leases, cancellation, retry rules, execution target selection.
+6. **Hardening & release** — permissions, read-only enforcement, failure recovery, reconciliation, package signing, tests, end-to-end validation.
 
 First usable release: **macOS desktop + web**, with iOS/Android targets kept in the project from day one. Mobile MVP = task capture, spec approval, agent monitoring, PR notifications.
 
@@ -219,12 +215,6 @@ refinement:
   auto_start: true
   github_issue_requires_approval: true
   repository_access: read_only
-
-implementation:
-  auto_start: false
-  require_explicit_authorization: true
-  worktree_isolation: true
-  direct_push_to_protected_branch: false
 ```
 
-**Decision:** Flutter client, TypeScript backend and worker services, OpenCode as the sole default harness, DeepSeek Flash as the default model. Local and cloud workers execute the same agent contract.
+**Decision:** Flutter client, TypeScript backend and worker services, OpenCode as the sole default harness, DeepSeek Flash as the default model. Local and cloud workers run the same read-only agent contract.
