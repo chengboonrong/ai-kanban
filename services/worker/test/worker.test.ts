@@ -1,12 +1,31 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { promisify } from 'node:util';
 import type { OpencodeClient, Part } from '@opencode-ai/sdk/v2';
+import { claudeArgs, parseClaudeLine, refineWithClaude } from '../src/adapters/claude.ts';
 import { refine, toolEvent } from '../src/adapters/opencode.ts';
-import { checkCheckout, escapingSymlinks, exportCommit, scrub, snapshot, verifyEvidence } from '../src/repository.ts';
+import { checkCheckout, escapingSymlinks, exportCommit, githubCheckouts, scrub, snapshot, verifyEvidence } from '../src/repository.ts';
+import { launchdPlist } from '../src/service.ts';
 
 function repo(remote?: string) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'worker-test-'));
@@ -154,4 +173,256 @@ test('refine takes the answer to its own prompt, however many agent steps it too
   const result = await refine({ client, dir: '/x', job, commitSha: 'abc', models: ['opencode/m'], onEvent: () => {}, signal: new AbortController().signal });
   assert.equal(result.spec, spec);
   assert.equal(polls, 2, 'waited while the session was busy');
+});
+
+const fixture = (name: string) => path.join(import.meta.dirname, 'fixtures', name);
+const CLI = path.join(import.meta.dirname, '..', 'src', 'cli.ts');
+const tmp = () => realpathSync(mkdtempSync(path.join(os.tmpdir(), 'worker-test-')));
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// A fake `claude` on the PATH. It records how it was started, then plays the mode in FAKE_CLAUDE: the captured
+// stream (success), an init line with an extra tool, an error result, or a hang that honours or ignores SIGTERM.
+const bin = tmp();
+writeFileSync(
+  path.join(bin, 'claude'),
+  `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env: process.env, pid: process.pid }));
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+const init = { type: 'system', subtype: 'init', tools: ['Glob', 'Grep', 'Read', 'StructuredOutput'], mcp_servers: [], model: 'm' };
+const mode = process.env.FAKE_CLAUDE;
+if (mode === 'success') process.stdout.write(fs.readFileSync(${JSON.stringify(fixture('claude-stream.jsonl'))}, 'utf8').replaceAll('/private/tmp/ai-kanban-run-x', process.cwd()));
+else if (mode === 'tools' || mode === 'mcp')
+  out(mode === 'tools' ? { ...init, tools: [...init.tools, 'Bash'] } : { ...init, mcp_servers: [{ name: 'mail', status: 'connected' }] }),
+    setTimeout(() => out({ type: 'result', subtype: 'success', structured_output: {} }), 1000);
+else if (mode === 'error') out(init), out({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 401 Invalid authentication credentials' });
+else out(init);
+if (mode === 'stubborn') process.on('SIGTERM', () => {});
+if (mode === 'hang' || mode === 'stubborn') setInterval(() => {}, 1000);
+if (mode === 'stubborn') setTimeout(() => process.exit(), 8000); // so a missing SIGKILL fails the test instead of hanging it
+`,
+);
+chmodSync(path.join(bin, 'claude'), 0o755);
+process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+
+const job = { id: 'r1', repository: 'acme/web', task: { title: 'Document hello.txt', description: '' } };
+async function claude(mode: string, signal = new AbortController().signal) {
+  const dir = tmp();
+  const log = path.join(tmp(), 'claude.json');
+  process.env.FAKE_CLAUDE = mode;
+  process.env.FAKE_CLAUDE_LOG = log;
+  const events: unknown[] = [];
+  const result = refineWithClaude({ dir, job, commitSha: 'abc', signal, onEvent: (e) => events.push(e) });
+  const started = () => JSON.parse(readFileSync(log, 'utf8'));
+  return { dir, result, events, started };
+}
+
+test('claudeArgs allows only reading tools and puts the brief last', () => {
+  const args = claudeArgs({ schema: { type: 'object' }, prompt: 'Task brief', systemPrompt: 'You are the Refiner.' });
+  assert.deepEqual(args, [
+    '-p',
+    '--restricted',
+    '--strict-mcp-config',
+    '--tools',
+    'Read,Glob,Grep',
+    '--disable-slash-commands',
+    '--no-session-persistence',
+    '--settings',
+    '{"disableAllHooks":true}',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+    '--json-schema',
+    '{"type":"object"}',
+    '--append-system-prompt',
+    'You are the Refiner.',
+    'Task brief',
+  ]);
+  const withModel = claudeArgs({ schema: {}, prompt: 'p', systemPrompt: 's', model: 'sonnet' });
+  assert.deepEqual(withModel.slice(-3), ['--model', 'sonnet', 'p']);
+});
+
+test('parseClaudeLine turns a captured stream into init, one event per finished tool call, and the result', () => {
+  const calls = new Map();
+  const parsed = readFileSync(fixture('claude-stream.jsonl'), 'utf8')
+    .split('\n')
+    .map((line) => parseClaudeLine(line, '/private/tmp/ai-kanban-run-x', calls));
+  const init = parsed.find((p) => p && 'init' in p);
+  assert.deepEqual(init, { init: { tools: ['Glob', 'Grep', 'Read', 'StructuredOutput'], mcpServers: [], model: 'claude-fable-5-2' } });
+  const events = parsed.flatMap((p) => (p && 'events' in p ? p.events : []));
+  assert.deepEqual(events, [
+    { kind: 'tool', data: { tool: 'read', target: 'hello.txt', ok: true } },
+    { kind: 'tool', data: { tool: 'read', target: 'missing.txt', ok: false } }, // StructuredOutput isn't one
+  ]);
+  const result = parsed.find((p) => p && 'result' in p);
+  assert.ok(result && 'result' in result);
+  assert.equal(result.result.subtype, 'success');
+  assert.equal((result.result.structured_output as { title: string }).title, 'Document hello.txt');
+  assert.equal(calls.size, 0, 'every call got its result');
+  assert.equal(parseClaudeLine('not json', '/x', calls), undefined);
+  assert.equal(parseClaudeLine('{"type":"system","subtype":"session_state_changed"}', '/x', calls), undefined);
+});
+
+test('refineWithClaude runs claude in the export with a clean environment and returns the spec', async () => {
+  process.env.GIT_DIR = '/somewhere/.git'; // as when the worker is started from a git hook
+  try {
+    const { dir, result, events, started } = await claude('success');
+    const out = await result;
+    assert.equal((out.spec as { title?: string }).title, 'Document hello.txt');
+    assert.equal(out.model, 'claude-fable-5-2');
+    assert.equal(out.cost, 0.1490187);
+    assert.equal(out.sessionId, '00000000-0000-0000-0000-000000000000');
+    assert.equal((out.tokenUsage as { output_tokens: number }).output_tokens, 576);
+    assert.deepEqual(events, [
+      { kind: 'model', data: { model: 'claude-fable-5-2' } },
+      { kind: 'tool', data: { tool: 'read', target: 'hello.txt', ok: true } },
+      { kind: 'tool', data: { tool: 'read', target: 'missing.txt', ok: false } },
+    ]);
+    const run = started();
+    assert.equal(run.cwd, dir);
+    assert.equal(run.env.GIT_DIR, undefined);
+    assert.equal(run.env.DISABLE_AUTOUPDATER, '1');
+    assert.deepEqual(run.argv.slice(0, 3), ['-p', '--restricted', '--strict-mcp-config']);
+    assert.match(run.argv.at(-1), /^Task brief\nTitle: Document hello.txt\n/);
+  } finally {
+    delete process.env.GIT_DIR;
+  }
+});
+
+test('refineWithClaude refuses a claude that starts with more tools or an MCP server, and kills it', async () => {
+  for (const mode of ['tools', 'mcp']) {
+    const { result, started } = await claude(mode);
+    await assert.rejects(result, /tools beyond Read\/Glob\/Grep; refusing to run/);
+    assert.equal(alive(started().pid), false);
+  }
+});
+
+test('refineWithClaude fails with the error claude reports', async () => {
+  await assert.rejects((await claude('error')).result, /Claude Code failed: API Error: 401/);
+});
+
+test('refineWithClaude kills a claude that ignores SIGTERM once aborted', async () => {
+  const ac = new AbortController();
+  const { result, started } = await claude('stubborn', ac.signal);
+  while (!existsSync(process.env.FAKE_CLAUDE_LOG!)) await sleep(20);
+  await sleep(200); // let it install its SIGTERM handler
+  const t0 = Date.now();
+  ac.abort();
+  await assert.rejects(result, /cancelled/);
+  const waited = Date.now() - t0;
+  assert.ok(waited >= 4900 && waited < 7000, `SIGKILL comes 5 s after SIGTERM (took ${waited} ms)`);
+  assert.equal(alive(started().pid), false);
+});
+
+test('launchdPlist runs start with absolute paths, a usable PATH and no token', () => {
+  const o = {
+    node: '/opt/homebrew/bin/node',
+    cli: '/Users/me/code/ai-kanban/services/worker/src/cli.ts',
+    config: '/Users/me/.config/ai-kanban/worker.json',
+    path: '/Users/me/.local/bin:node_modules/.bin::/opt/homebrew/bin:/usr/bin',
+    log: '/Users/me/Library/Logs/ai-kanban-worker.log',
+  };
+  const plist = launchdPlist(o);
+  assert.match(plist, /<key>Label<\/key><string>ai\.kanban\.worker<\/string>/);
+  assert.match(plist, new RegExp(`<array><string>${o.node}</string><string>${o.cli}</string><string>start</string></array>`));
+  assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
+  assert.match(plist, /<key>KeepAlive<\/key>\s*<dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
+  assert.match(plist, new RegExp(`<key>AI_KANBAN_WORKER_CONFIG</key><string>${o.config}</string>`));
+  assert.match(plist, /<key>PATH<\/key><string>\/Users\/me\/\.local\/bin:\/opt\/homebrew\/bin:\/usr\/bin:\/bin:\/usr\/sbin:\/sbin<\/string>/);
+  assert.equal(plist.match(new RegExp(`<string>${o.log}</string>`, 'g'))?.length, 2, 'stdout and stderr');
+  assert.doesNotMatch(plist, /wkr_|token/i);
+  assert.throws(() => launchdPlist({ ...o, config: 'worker.json' }), /absolute/);
+  if (process.platform === 'darwin') {
+    const file = path.join(tmp(), 'worker.plist');
+    writeFileSync(file, plist);
+    execFileSync('plutil', ['-lint', file]);
+  }
+});
+
+test('githubCheckouts keeps the git checkouts whose remote is on GitHub', () => {
+  assert.deepEqual(githubCheckouts(JSON.parse(readFileSync(fixture('orca-repo-list.json'), 'utf8'))), [
+    { repository: 'acme/web', path: '/Users/someone/code/web' },
+    { repository: 'acme/api.v2', path: '/Users/someone/code/api' },
+  ]);
+  assert.deepEqual(githubCheckouts({}), []);
+});
+
+type Route = (body: Record<string, unknown>) => [number, object?];
+async function fakeApi(routes: Record<string, Route>) {
+  const requests: { route: string; body: Record<string, unknown> }[] = [];
+  const server = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const route = `${req.method} ${req.url}`;
+    const body = raw ? JSON.parse(raw) : {};
+    requests.push({ route, body });
+    const [status, out] = routes[route]?.(body) ?? [404, { message: 'not found' }];
+    res.writeHead(status, out ? { 'content-type': 'application/json' } : {}).end(out ? JSON.stringify(out) : undefined);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests, close: () => server.close() };
+}
+
+test('connect pairs with a code and keeps the checkouts only for the same API', async () => {
+  const api = await fakeApi({
+    'POST /workers/pair': (b) => (b.code === 'BAD' ? [400, { message: 'invalid or expired code' }] : [201, { id: 'w1', name: b.name, token: 'wkr_new' }]),
+  });
+  const config = path.join(tmp(), 'worker.json');
+  const cli = (...args: string[]) => promisify(execFile)(process.execPath, [CLI, ...args], { env: { ...process.env, AI_KANBAN_WORKER_CONFIG: config } });
+  const read = () => JSON.parse(readFileSync(config, 'utf8'));
+  try {
+    writeFileSync(config, JSON.stringify({ apiUrl: api.url, token: 'wkr_old', name: 'old', repositories: { 'acme/web': '/x' }, models: ['m'], refiner: 'claude' }));
+    await cli('connect', 'abcde-fghjk', '--name', 'My Mac');
+    assert.deepEqual(api.requests.at(-1), { route: 'POST /workers/pair', body: { code: 'abcde-fghjk', name: 'My Mac' } });
+    assert.deepEqual(read(), { apiUrl: api.url, token: 'wkr_new', name: 'My Mac', repositories: { 'acme/web': '/x' }, models: ['m'], refiner: 'claude' });
+    assert.equal(statSync(config).mode & 0o777, 0o600);
+
+    writeFileSync(config, JSON.stringify({ ...read(), apiUrl: 'http://elsewhere.example' }));
+    await cli('connect', 'CODE', '--api', api.url, '--name', 'My Mac');
+    assert.deepEqual(read().repositories, {}, 'a different API starts with no checkouts');
+    assert.equal(read().apiUrl, api.url);
+
+    await assert.rejects(cli('connect', 'BAD'), /pairing failed \(400\): invalid or expired code/);
+  } finally {
+    api.close();
+  }
+});
+
+test('SIGTERM during a job releases the run, stops the agent and exits 0', async () => {
+  const RUN = '00000000-0000-0000-0000-0000000000aa';
+  let claims = 0;
+  const api = await fakeApi({
+    'GET /worker/me': () => [200, { id: 'w1', name: 'My Mac' }],
+    'POST /worker/claim': () => (claims++ ? [204] : [200, { ...job, id: RUN }]),
+    [`POST /worker/runs/${RUN}/events`]: () => [204],
+    [`POST /worker/runs/${RUN}/release`]: () => [204],
+  });
+  const config = path.join(tmp(), 'worker.json');
+  const log = path.join(tmp(), 'claude.json');
+  writeFileSync(config, JSON.stringify({ apiUrl: api.url, token: 'wkr_t', name: 'My Mac', repositories: { 'acme/web': repo() }, models: [], refiner: 'claude' }));
+  const child = spawn(process.execPath, [CLI, 'start'], {
+    env: { ...process.env, AI_KANBAN_WORKER_CONFIG: config, FAKE_CLAUDE: 'hang', FAKE_CLAUDE_LOG: log },
+    stdio: 'ignore',
+  });
+  try {
+    for (const t0 = Date.now(); !existsSync(log); await sleep(50)) assert.ok(Date.now() - t0 < 15_000, 'the agent started');
+    await sleep(200);
+    child.kill('SIGTERM');
+    const [code] = await once(child, 'exit');
+    assert.equal(code, 0);
+    const routes = api.requests.map((r) => r.route);
+    assert.ok(routes.includes(`POST /worker/runs/${RUN}/release`));
+    assert.ok(!routes.some((r) => r.endsWith('/fail') || r.endsWith('/complete')));
+    assert.equal(alive(JSON.parse(readFileSync(log, 'utf8')).pid), false);
+  } finally {
+    child.kill('SIGKILL');
+    api.close();
+  }
 });

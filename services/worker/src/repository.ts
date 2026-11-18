@@ -100,3 +100,25 @@ export async function scrub(dir: string, text: string) {
   for (const root of roots) text = text.replaceAll(root + path.sep, '').replaceAll(root, '.');
   return text.replaceAll(os.homedir(), '~');
 }
+
+type OrcaRepos = { result?: { repos?: { kind?: string; path?: string; gitRemoteIdentity?: { canonicalKey?: string } | null }[] } };
+
+/** The GitHub checkouts in `orca repo list --json` output, as `[{repository: 'owner/name', path}]`. */
+export function githubCheckouts(json: OrcaRepos) {
+  return (json.result?.repos ?? []).flatMap((r) => {
+    const name = /^github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)$/i.exec(r.gitRemoteIdentity?.canonicalKey ?? '')?.[1];
+    return r.kind === 'git' && name && r.path ? [{ repository: name, path: r.path }] : [];
+  });
+}
+
+/** The checkouts Orca knows about on this machine. */
+export async function orcaCheckouts() {
+  for (const orca of ['orca', '/Applications/Orca.app/Contents/Resources/bin/orca']) {
+    try {
+      return githubCheckouts(JSON.parse((await promisify(execFile)(orca, ['repo', 'list', '--json'])).stdout));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+  }
+  throw new Error('Orca not found; use allow <owner/name> <path-to-checkout>');
+}

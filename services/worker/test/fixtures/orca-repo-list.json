@@ -1,0 +1,68 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "ok": true,
+  "result": {
+    "repos": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "path": "/Users/someone/code/web",
+        "displayName": "web",
+        "badgeColor": "#737373",
+        "addedAt": 1790000000000,
+        "kind": "git",
+        "externalWorktreeVisibilityLegacy": false,
+        "externalWorktreeVisibility": "show",
+        "gitUsername": "someone",
+        "hookSettings": { "mode": "auto", "setupRunPolicy": "run-by-default", "setupAgentStartupPolicy": "start-immediately", "scripts": { "setup": "npm install", "archive": "" }, "commandSourcePolicy": "local-only" },
+        "repoIcon": { "type": "image", "src": "https://github.com/acme.png?size=64", "source": "github", "label": "acme/web" },
+        "upstream": null,
+        "gitRemoteIdentity": { "canonicalKey": "github.com/acme/web", "remoteName": "origin", "remoteUrl": "git@github.com:acme/web.git" },
+        "projectHostSetupMethod": "imported-existing-folder",
+        "agentWorkspaceTrust": "pre-trust"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "path": "/Users/someone/code/api",
+        "displayName": "api",
+        "badgeColor": "#737373",
+        "addedAt": 1790000000001,
+        "kind": "git",
+        "externalWorktreeVisibilityLegacy": false,
+        "gitUsername": "someone",
+        "upstream": null,
+        "gitRemoteIdentity": { "canonicalKey": "github.com/acme/api.v2", "remoteName": "public", "remoteUrl": "https://github.com/acme/api.v2.git" },
+        "hookSettings": { "mode": "auto" },
+        "externalWorktreeVisibility": "hide"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000003",
+        "path": "/Users/someone/code/scratch",
+        "displayName": "scratch",
+        "badgeColor": "#737373",
+        "addedAt": 1790000000002,
+        "kind": "git",
+        "externalWorktreeVisibilityLegacy": false,
+        "upstream": null,
+        "gitRemoteIdentity": null,
+        "gitUsername": "",
+        "hookSettings": { "mode": "auto" },
+        "externalWorktreeVisibility": "hide"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000004",
+        "path": "/Users/someone/code/tools",
+        "displayName": "tools",
+        "kind": "git",
+        "gitRemoteIdentity": { "canonicalKey": "gitlab.com/acme/tools", "remoteName": "origin", "remoteUrl": "git@gitlab.com:acme/tools.git" }
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000005",
+        "path": "/Users/someone/notes",
+        "displayName": "notes",
+        "kind": "folder",
+        "gitRemoteIdentity": { "canonicalKey": "github.com/acme/notes", "remoteName": "origin", "remoteUrl": "git@github.com:acme/notes.git" }
+      }
+    ]
+  },
+  "_meta": { "runtimeId": "00000000-0000-0000-0000-000000000000" }
+}

@@ -6,9 +6,11 @@
     "node": ">=24"
   },
   "scripts": {
-    "register": "node src/cli.ts register",
+    "connect": "node src/cli.ts connect",
+    "checkouts": "node src/cli.ts checkouts",
     "allow": "node src/cli.ts allow",
     "start": "node src/cli.ts start",
+    "service": "node src/cli.ts service",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
