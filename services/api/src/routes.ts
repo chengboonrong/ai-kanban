@@ -8,10 +8,16 @@ const text = (maxLength: number) => ({ type: 'string', minLength: 1, maxLength }
 const body = (properties: Record<string, object>, required: string[] = []) =>
   ({ type: 'object', required, minProperties: 1, additionalProperties: false, properties }) as const;
 
-const BOARD = `id, workspace_id AS "workspaceId", name, created_at AS "createdAt"`;
+const BOARD = `id, workspace_id AS "workspaceId", name, repository, created_at AS "createdAt"`;
 const COLUMN = `id, board_id AS "boardId", name, position`;
 const TASK = `id, board_id AS "boardId", column_id AS "columnId", title, description, position,
   created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"`;
+
+export const REPOSITORY = { type: ['string', 'null'], pattern: '^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$', maxLength: 140 } as const;
+
+export const RUN = `id, task_id AS "taskId", repository, state, execution_target AS "executionTarget", worker_id AS "workerId",
+  harness, model, session_id AS "sessionId", repository_commit_sha AS "commitSha", token_usage AS "tokenUsage", cost::float8 AS cost,
+  error, created_at AS "createdAt", started_at AS "startedAt", completed_at AS "completedAt"`;
 
 const DEFAULT_COLUMNS = ['Backlog', 'Todo', 'In Progress', 'Done'];
 
@@ -25,7 +31,7 @@ async function workspaceRole(db: Db, userId: string, workspaceId: string): Promi
 }
 
 /** Resolves the board that owns a board/column/task the user can access; 404 otherwise. */
-async function boardFor(db: Db, userId: string, kind: 'board' | 'column' | 'task', id: string): Promise<string> {
+export async function boardFor(db: Db, userId: string, kind: 'board' | 'column' | 'task', id: string): Promise<string> {
   const [table, boardCol] = { board: ['boards', 'id'], column: ['columns', 'board_id'], task: ['tasks', 'board_id'] }[kind];
   const { rows } = await db.query(
     `SELECT b.id FROM ${table} x
@@ -75,12 +81,37 @@ async function move(
 async function loadBoard(db: Db, boardId: string) {
   const { rows: [board] } = await db.query(`SELECT ${BOARD} FROM boards WHERE id = $1`, [boardId]);
   const { rows: columns } = await db.query(`SELECT ${COLUMN} FROM columns WHERE board_id = $1 ORDER BY position`, [boardId]);
-  const { rows: tasks } = await db.query(`SELECT ${TASK} FROM tasks WHERE board_id = $1 ORDER BY position`, [boardId]);
+  // refinement: the card's AI state — an active run wins, then the latest spec's approval, then the last run's outcome.
+  const { rows: tasks } = await db.query(
+    `SELECT ${TASK},
+       CASE WHEN r.state IN ('queued', 'running') THEN r.state
+            WHEN s.approved_at IS NOT NULL THEN 'approved'
+            WHEN r.state = 'failed' THEN 'failed'
+            WHEN s.version IS NOT NULL THEN 'ready' END AS refinement
+     FROM tasks t
+     LEFT JOIN LATERAL (SELECT state FROM agent_runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1) r ON true
+     LEFT JOIN LATERAL (SELECT version, approved_at FROM specs WHERE task_id = t.id ORDER BY version DESC LIMIT 1) s ON true
+     WHERE board_id = $1 ORDER BY position`,
+    [boardId],
+  );
   return { ...board, columns: columns.map((col) => ({ ...col, tasks: tasks.filter((t) => t.columnId === col.id) })) };
 }
 
-const logActivity = (db: Db, taskId: string, actorId: string, kind: string, data: object = {}) =>
+export const logActivity = (db: Db, taskId: string, actorId: string, kind: string, data: object = {}) =>
   db.query('INSERT INTO task_activity (task_id, actor_id, kind, data) VALUES ($1, $2, $3, $4)', [taskId, actorId, kind, data]);
+
+/** Queues a refinement unless one is already queued or running for the task; returns the active run either way. */
+export async function enqueueRun(db: Db, taskId: string, userId: string, repository: string) {
+  const { rows } = await db.query(
+    `INSERT INTO agent_runs (task_id, requested_by, repository) VALUES ($1, $2, $3)
+     ON CONFLICT (task_id) WHERE state IN ('queued', 'running') DO NOTHING RETURNING id`,
+    [taskId, userId, repository],
+  );
+  if (rows[0]) await logActivity(db, taskId, userId, 'refinement_requested');
+  const { rows: [run] } = await db.query(`SELECT ${RUN} FROM agent_runs WHERE task_id = $1 AND state IN ('queued', 'running')`, [taskId]);
+  if (!run) return enqueueRun(db, taskId, userId, repository); // the active run ended in between: queue a new one
+  return { run, created: !!rows[0] };
+}
 
 const columnName = async (db: Db, id: string) => (await db.query('SELECT name FROM columns WHERE id = $1', [id])).rows[0]?.name;
 
@@ -149,10 +180,26 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
     return loadBoard(pool, await boardFor(pool, req.userId, 'board', (req.params as Id).id));
   });
 
-  app.patch('/boards/:id', { schema: { params: idParams, body: body({ name: text(200) }, ['name']) } }, async (req) => {
+  app.patch('/boards/:id', { schema: { params: idParams, body: body({ name: text(200), repository: REPOSITORY }) } }, async (req) => {
     const boardId = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
-    const { rows } = await pool.query(`UPDATE boards SET name = $2 WHERE id = $1 RETURNING ${BOARD}`, [boardId, (req.body as { name: string }).name]);
-    return rows[0];
+    const patch = req.body as { name?: string; repository?: string | null };
+    const repository = patch.repository?.toLowerCase() ?? null; // GitHub names are case-insensitive
+    return tx(pool, async (c) => {
+      const { rows } = await c.query(
+        `UPDATE boards SET name = COALESCE($2, name), repository = CASE WHEN $3 THEN $4 ELSE repository END,
+           repository_connected_by = CASE WHEN $3 AND $4 IS DISTINCT FROM repository THEN $5 ELSE repository_connected_by END
+         WHERE id = $1 RETURNING ${BOARD}`,
+        [boardId, patch.name ?? null, 'repository' in patch, repository, repository && req.userId],
+      );
+      if (!rows[0]) throw httpError(404, 'board not found'); // deleted meanwhile
+      // Queued runs must not go on to read a repository the board no longer points at.
+      await c.query(
+        `UPDATE agent_runs SET state = 'cancelled', completed_at = now()
+         WHERE state = 'queued' AND repository IS DISTINCT FROM $2 AND task_id IN (SELECT id FROM tasks WHERE board_id = $1)`,
+        [boardId, rows[0].repository],
+      );
+      return rows[0];
+    });
   });
 
   app.delete('/boards/:id', { schema: { params: idParams } }, async (req, reply) => {
@@ -239,6 +286,9 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
           [boardId, col.id, title, description, req.userId, key ?? null],
         );
         await logActivity(c, task.id, req.userId, 'created', { title, column: await columnName(c, col.id) });
+        // refinement.auto_start: a board with a repository refines every new card.
+        const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1', [boardId]);
+        if (board.repository) await enqueueRun(c, task.id, req.userId, board.repository);
         return { task, created: true };
       });
       return reply.code(result.created ? 201 : 200).send(result.task);

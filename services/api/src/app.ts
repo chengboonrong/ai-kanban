@@ -1,16 +1,21 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type pg from 'pg';
-import { httpError } from './db.ts';
+import { httpError, sha256 } from './db.ts';
+import { registerRefinementRoutes } from './refinement.ts';
 import { registerRoutes } from './routes.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
     userId: string;
+    /** Set on worker routes; userId is then the worker's owner. */
+    workerId: string;
   }
   interface FastifyContextConfig {
     public?: boolean;
+    /** Authenticated with a worker token instead of a user session. */
+    worker?: boolean;
   }
 }
 
@@ -21,7 +26,6 @@ export interface AppOptions {
   logger?: boolean;
 }
 
-const sha256 = (s: string) => createHash('sha256').update(s).digest();
 const bearer = (header = '') => /^Bearer (\S+)$/.exec(header)?.[1];
 
 export async function buildApp({ pool, authMode, logger = false }: AppOptions) {
@@ -44,10 +48,18 @@ export async function buildApp({ pool, authMode, logger = false }: AppOptions) {
   });
 
   app.decorateRequest('userId', '');
+  app.decorateRequest('workerId', '');
   app.addHook('onRequest', async (req) => {
     if (req.routeOptions.config.public) return;
     const token = bearer(req.headers.authorization);
     if (!token) throw httpError(401, 'Missing bearer token');
+    if (req.routeOptions.config.worker) {
+      const { rows } = await pool.query('UPDATE workers SET last_seen_at = now() WHERE token_hash = $1 RETURNING id, owner_id', [sha256(token)]);
+      if (!rows[0]) throw httpError(401, 'Invalid worker token');
+      req.workerId = rows[0].id;
+      req.userId = rows[0].owner_id;
+      return;
+    }
     const { rows } = await pool.query('SELECT user_id FROM sessions WHERE token_hash = $1 AND expires_at > now()', [sha256(token)]);
     if (!rows[0]) throw httpError(401, 'Invalid or expired session');
     req.userId = rows[0].user_id;
@@ -100,5 +112,6 @@ export async function buildApp({ pool, authMode, logger = false }: AppOptions) {
   });
 
   registerRoutes(app, pool);
+  registerRefinementRoutes(app, pool);
   return app;
 }

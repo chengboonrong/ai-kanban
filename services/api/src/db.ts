@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import pg from 'pg';
 
 export type Db = pg.Pool | pg.PoolClient;
@@ -24,3 +25,5 @@ export async function tx<T>(pool: pg.Pool, fn: (c: pg.PoolClient) => Promise<T>)
 export function httpError(statusCode: number, message: string) {
   return Object.assign(new Error(message), { statusCode });
 }
+
+export const sha256 = (s: string) => createHash('sha256').update(s).digest();
