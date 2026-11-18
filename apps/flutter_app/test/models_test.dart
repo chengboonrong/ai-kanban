@@ -42,4 +42,24 @@ void main() {
       ['done', 'todo'],
     );
   });
+
+  test('a task from an API without GitHub sync has no github summary', () {
+    final base = {'id': 't', 'columnId': 'c', 'title': 'T', 'description': ''};
+    expect(Task.fromJson(base).github, isNull);
+    expect(Task.fromJson({...base, 'github': null}).github, isNull);
+  });
+
+  test('the board keeps polling while an issue is pending or an open issue has PRs', () {
+    TaskGitHub gh(Map<String, dynamic>? issue, int prs) =>
+        TaskGitHub.fromJson({'issue': issue, 'prs': prs});
+    expect(gh({'state': 'pending'}, 0).active, isTrue);
+    expect(gh({'number': 1, 'url': 'u', 'state': 'open'}, 1).active, isTrue);
+    expect(
+      gh({'number': 1, 'url': 'u', 'state': 'open'}, 0).active,
+      isTrue,
+    ); // a first PR may link
+    expect(gh({'number': 1, 'url': 'u', 'state': 'closed'}, 1).active, isFalse);
+    expect(gh({'state': 'failed'}, 0).active, isFalse);
+    expect(gh(null, 0).active, isFalse);
+  });
 }
