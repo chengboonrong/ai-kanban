@@ -19,6 +19,12 @@ export const RUN = `id, task_id AS "taskId", repository, state, execution_target
   harness, model, session_id AS "sessionId", repository_commit_sha AS "commitSha", token_usage AS "tokenUsage", cost::float8 AS cost,
   error, created_at AS "createdAt", started_at AS "startedAt", completed_at AS "completedAt"`;
 
+/** A github_issues row (alias gi) on a card: the issue once it exists, else where its creation stands. */
+const ISSUE_JSON = `CASE gi.state
+    WHEN 'created' THEN json_build_object('number', gi.number, 'url', gi.url, 'state', gi.issue_state)
+    WHEN 'failed' THEN json_build_object('state', 'failed', 'error', gi.last_error)
+    ELSE json_build_object('state', 'pending') END`;
+
 const DEFAULT_COLUMNS = ['Backlog', 'Todo', 'In Progress', 'Done'];
 
 type Id = { id: string };
@@ -82,15 +88,23 @@ async function loadBoard(db: Db, boardId: string) {
   const { rows: [board] } = await db.query(`SELECT ${BOARD} FROM boards WHERE id = $1`, [boardId]);
   const { rows: columns } = await db.query(`SELECT ${COLUMN} FROM columns WHERE board_id = $1 ORDER BY position`, [boardId]);
   // refinement: the card's AI state — an active run wins, then the latest spec's approval, then the last run's outcome.
+  // github: the issue, how many PRs link to it, and for open ones the newest PR's review and the worst CI result.
   const { rows: tasks } = await db.query(
     `SELECT ${TASK},
        CASE WHEN r.state IN ('queued', 'running') THEN r.state
             WHEN s.approved_at IS NOT NULL THEN 'approved'
             WHEN r.state = 'failed' THEN 'failed'
-            WHEN s.version IS NOT NULL THEN 'ready' END AS refinement
+            WHEN s.version IS NOT NULL THEN 'ready' END AS refinement,
+       CASE WHEN g.issue IS NOT NULL THEN json_build_object('issue', g.issue, 'prs', p.n, 'review', p.review, 'ci', p.ci) END AS github
      FROM tasks t
      LEFT JOIN LATERAL (SELECT state FROM agent_runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1) r ON true
      LEFT JOIN LATERAL (SELECT version, approved_at FROM specs WHERE task_id = t.id ORDER BY version DESC LIMIT 1) s ON true
+     LEFT JOIN LATERAL (SELECT ${ISSUE_JSON} AS issue FROM github_issues gi WHERE gi.task_id = t.id) g ON true
+     LEFT JOIN LATERAL (
+       SELECT count(*)::int AS n,
+         (array_agg(pr.review ORDER BY pr.github_updated_at DESC NULLS LAST) FILTER (WHERE pr.state = 'open'))[1] AS review,
+         (array_agg(pr.ci ORDER BY array_position(ARRAY['failure', 'pending', 'success', 'none'], pr.ci)) FILTER (WHERE pr.state = 'open'))[1] AS ci
+       FROM pull_request_tasks pt JOIN pull_requests pr ON pr.id = pt.pull_request_id WHERE pt.task_id = t.id) p ON true
      WHERE board_id = $1 ORDER BY position`,
     [boardId],
   );
@@ -154,7 +168,11 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
   app.delete('/workspaces/:id', { schema: { params: idParams } }, async (req, reply) => {
     const { id } = req.params as Id;
     if ((await workspaceRole(pool, req.userId, id)) !== 'owner') throw httpError(403, 'only owners can delete a workspace');
-    await pool.query('DELETE FROM workspaces WHERE id = $1', [id]);
+    await tx(pool, async (c) => {
+      // Tasks locked in id order first, as the GitHub sync locks them, so the cascade can't deadlock with it.
+      await c.query('SELECT 1 FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.workspace_id = $1 ORDER BY t.id FOR UPDATE OF t', [id]);
+      await c.query('DELETE FROM workspaces WHERE id = $1', [id]);
+    });
     return reply.code(204).send();
   });
 
@@ -198,12 +216,22 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
          WHERE state = 'queued' AND repository IS DISTINCT FROM $2 AND task_id IN (SELECT id FROM tasks WHERE board_id = $1)`,
         [boardId, rows[0].repository],
       );
+      // Likewise issues not yet filed: their spec describes the old repository.
+      await c.query(
+        `UPDATE github_issues SET state = 'failed', last_error = 'the board''s repository changed', updated_at = now()
+         WHERE state = 'pending' AND repository IS DISTINCT FROM $2 AND task_id IN (SELECT id FROM tasks WHERE board_id = $1)`,
+        [boardId, rows[0].repository],
+      );
       return rows[0];
     });
   });
 
   app.delete('/boards/:id', { schema: { params: idParams } }, async (req, reply) => {
-    await pool.query('DELETE FROM boards WHERE id = $1', [await boardFor(pool, req.userId, 'board', (req.params as Id).id)]);
+    const id = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
+    await tx(pool, async (c) => {
+      await c.query('SELECT 1 FROM tasks WHERE board_id = $1 ORDER BY id FOR UPDATE', [id]); // as for workspaces above
+      await c.query('DELETE FROM boards WHERE id = $1', [id]);
+    });
     return reply.code(204).send();
   });
 

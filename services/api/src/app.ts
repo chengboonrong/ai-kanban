@@ -5,6 +5,7 @@ import type pg from 'pg';
 import { httpError, sha256 } from './db.ts';
 import { registerRefinementRoutes } from './refinement.ts';
 import { registerRoutes } from './routes.ts';
+import { registerGitHubRoutes } from './sync.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -113,5 +114,6 @@ export async function buildApp({ pool, authMode, logger = false }: AppOptions) {
 
   registerRoutes(app, pool);
   registerRefinementRoutes(app, pool);
+  registerGitHubRoutes(app, pool);
   return app;
 }
