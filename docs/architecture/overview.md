@@ -110,8 +110,8 @@ An agent run persists:
 
 ```
 agent_run
-  id, task_id, execution_target, worker_id
-  harness = "opencode", provider = "opencode", model = "opencode/deepseek-v4.1-flash-free"
+  id, task_id, worker_id, attempt, lease_until, retry_reason
+  harness = "opencode" | "claude-code" (reported at claim), model = "opencode/deepseek-v4.1-flash-free"
   session_id, repository_commit_sha, state
   started_at, completed_at
   token_usage, cost, artifact_refs, error_details
@@ -171,7 +171,7 @@ repository is connected. Until sign-in with GitHub verifies who may use a reposi
 
 ### Repository security
 
-Read-only access throughout: GitHub App permissions limited to issues write plus read access to contents (commit data on linked PRs), pull requests, checks and statuses; nothing clones repositories. Repository content is data, not instructions — the refiner never executes repository instructions, installs dependencies or runs scripts. Workers: a visible list of which repositories each may read, confirmed per repository.
+Read-only access throughout: GitHub App permissions limited to issues write plus read access to contents (commit data on linked PRs), pull requests, checks and statuses; the backend never clones repositories (the worker exports the commit locally). Repository content is data, not instructions — the refiner never executes repository instructions, installs dependencies or runs scripts. Workers: a visible list of which repositories each may read, confirmed per repository.
 
 ## 7. Monorepo structure
 
@@ -188,7 +188,7 @@ ai-kanban/
 └── docs/{architecture,security,adr}
 ```
 
-The desktop Flutter app registers and talks to the worker over loopback or authenticated local IPC.
+The app never talks to the worker directly: the worker pairs with the API by a one-time code, and both meet there.
 
 ## 8. MVP roadmap
 
@@ -227,7 +227,7 @@ execution:
   target: own_workers   # no hosted worker
   parallel_jobs_per_worker: 1
   lease_seconds: 90
-  max_run_minutes: 20
+  max_run_minutes: 20   # the API's cap; the worker stops itself at 15
   attempts: 3
 
 refinement:

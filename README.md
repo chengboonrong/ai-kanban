@@ -78,7 +78,7 @@ All three are one Flutter app with adaptive layouts.
 - **GitHub stays authoritative** for issues, PRs, reviews and CI.
 - **Agents are read-only.** They read, list and search the repository; edits, shell commands and Git writes are denied,
   and repository content is treated as data, never as instructions.
-- **Jobs are recoverable.** Worker leases mean a dropped connection never runs the same refinement twice, approval
+- **Jobs are recoverable.** Worker leases mean a dropped connection never produces two specs for one refinement, approval
   never creates a second issue, and a running job is never silently moved between workers.
 - **No secrets in clients.** Model and GitHub credentials stay on workers or the backend.
 
@@ -124,7 +124,7 @@ repo root), `dart format`, the analyzer, and the unit and API tests.
 
 ### Refining tasks with a local worker
 
-The worker reads repositories already checked out on your machine and needs the `opencode` CLI installed. It uses
+The worker reads repositories already checked out on your machine and needs the `opencode` CLI installed (or Claude Code, if you choose it as the refiner). It uses
 OpenCode's free `opencode/deepseek-v4.1-flash-free` (add fallbacks to `models` in `worker.json`; `opencode models
 opencode` lists what's available); repository code is sent to that provider. The free tier has a usage limit: once it's used up, runs fail with "Free limit reached"
 until it resets, or you set paid models in `worker.json`.
