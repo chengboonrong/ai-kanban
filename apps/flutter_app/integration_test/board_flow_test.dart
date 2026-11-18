@@ -3,6 +3,7 @@
 //   web:   chromedriver --port=4444 &  then
 //          fvm flutter drive --driver test_driver/integration_test.dart --target integration_test/board_flow_test.dart -d web-server --browser-name chrome --headless
 import 'package:ai_kanban/core/api.dart';
+import 'package:ai_kanban/core/router.dart';
 import 'package:ai_kanban/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -74,5 +75,16 @@ void main() {
     await tester.tap(find.text(title));
     await settle();
     expect(find.textContaining('moved it from Backlog to Todo'), findsOneWidget);
+
+    // Signing out and in as someone else must not show the previous user's cached data.
+    container.read(routerProvider).go('/');
+    await settle();
+    await tester.tap(find.byTooltip('Sign out'));
+    await settle();
+    await tester.enterText(find.byType(TextField), '$login-b');
+    await tester.tap(find.text('Sign in (dev)'));
+    await settle();
+    expect(find.text('Create a workspace to get started.'), findsOneWidget);
+    expect(find.text('Integration'), findsNothing);
   });
 }

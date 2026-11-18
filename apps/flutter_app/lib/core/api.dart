@@ -9,24 +9,30 @@ import 'models.dart';
 /// Only a URL is baked into the build; no secrets. Override with --dart-define=API_URL=...
 const apiUrl = String.fromEnvironment('API_URL', defaultValue: 'http://localhost:8080');
 
-final apiProvider = Provider<Api>((ref) {
-  final dio = Dio(BaseOptions(baseUrl: apiUrl, connectTimeout: const Duration(seconds: 10)));
-  dio.interceptors.add(InterceptorsWrapper(
-    onRequest: (options, handler) {
-      final token = ref.read(authProvider)?.token;
-      if (token != null) options.headers['authorization'] = 'Bearer $token';
-      handler.next(options);
-    },
-    onError: (e, handler) {
-      if (e.response?.statusCode == 401 && ref.read(authProvider) != null) ref.read(authProvider.notifier).clear();
-      handler.next(e);
-    },
-  ));
-  return Api(dio);
-});
+/// Rebuilt on every sign-in/out; everything that watches it refetches, so no data outlives its session.
+final apiProvider = Provider<Api>((ref) => Api.create(
+      token: ref.watch(authProvider)?.token,
+      onUnauthorized: () {
+        if (ref.mounted && ref.read(authProvider) != null) ref.read(authProvider.notifier).clear();
+      },
+    ));
 
 class Api {
   Api(this._dio);
+
+  factory Api.create({String? token, void Function()? onUnauthorized}) {
+    final dio = Dio(BaseOptions(
+      baseUrl: apiUrl,
+      connectTimeout: const Duration(seconds: 10),
+      headers: {if (token != null) 'authorization': 'Bearer $token'},
+    ));
+    dio.interceptors.add(InterceptorsWrapper(onError: (e, handler) {
+      if (e.response?.statusCode == 401) onUnauthorized?.call();
+      handler.next(e);
+    }));
+    return Api(dio);
+  }
+
   final Dio _dio;
 
   Future<Session> devLogin(String login) async =>

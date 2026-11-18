@@ -11,15 +11,16 @@ class Session {
 }
 
 // ponytail: session lives in memory only; persist it (secure storage) when real GitHub sign-in lands.
+// Uses its own Api rather than apiProvider, which depends on this provider.
 class AuthNotifier extends Notifier<Session?> {
   @override
   Session? build() => null;
 
-  Future<void> devLogin(String login) async => state = await ref.read(apiProvider).devLogin(login);
+  Future<void> devLogin(String login) async => state = await Api.create().devLogin(login);
 
   Future<void> logout() async {
     try {
-      await ref.read(apiProvider).logout();
+      await Api.create(token: state?.token).logout();
     } finally {
       state = null; // drop the local session even if the server is unreachable
     }

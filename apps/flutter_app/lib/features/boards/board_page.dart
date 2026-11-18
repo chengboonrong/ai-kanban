@@ -11,17 +11,20 @@ class BoardNotifier extends AsyncNotifier<Board> {
   final String boardId;
 
   Api get _api => ref.read(apiProvider);
+  int _mutations = 0;
 
   @override
   Future<Board> build() => ref.watch(apiProvider).board(boardId);
 
   /// Runs [action], then replaces local state with the server's board (also undoing a failed optimistic move).
   Future<void> _mutate(Future<void> Function() action) async {
+    final mutation = ++_mutations;
     try {
       await action();
     } finally {
       try {
-        state = AsyncData(await _api.board(boardId));
+        final board = await _api.board(boardId);
+        if (mutation == _mutations) state = AsyncData(board); // a later mutation (and its refresh) supersedes this one
       } catch (_) {
         // Keep the last good board on screen; the action's own error is what the caller reports.
       }
@@ -153,14 +156,14 @@ class _ColumnView extends StatelessWidget {
             child: ListView(padding: const EdgeInsets.symmetric(horizontal: 8), children: [
               for (final (i, task) in column.tasks.indexed)
                 DragTarget<Task>(
-                  onWillAcceptWithDetails: (d) => d.data.id != task.id,
                   onAcceptWithDetails: (d) {
+                    if (d.data.id == task.id) return; // dropped back on itself: stay put
                     // Drop before this card; positions are counted without the dragged card.
                     final from = column.tasks.indexWhere((t) => t.id == d.data.id);
                     move(d.data, from != -1 && from < i ? i - 1 : i);
                   },
                   builder: (context, over, _) => Column(children: [
-                    if (over.isNotEmpty) Divider(thickness: 3, color: theme.colorScheme.primary),
+                    if (over.any((t) => t?.id != task.id)) Divider(thickness: 3, color: theme.colorScheme.primary),
                     _TaskCard(boardId: board.id, task: task, width: cardWidth),
                   ]),
                 ),
