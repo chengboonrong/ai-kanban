@@ -68,24 +68,29 @@ Refinement and implementation are **separate agent capabilities**. A worker that
 | Setting | Value |
 | --- | --- |
 | Agent harness | OpenCode |
-| AI provider | DeepSeek API |
-| Default model | `deepseek-flash` (V4.1 Flash) — verify against current DeepSeek docs |
-| Advanced model | `deepseek-v4-pro` (optional) |
+| AI provider | OpenCode Zen free models (default); DeepSeek API with the user's own key (optional) |
+| Default model | `opencode/deepseek-v4.1-flash-free` |
+| Free fallback | `opencode/glm-5.3-flash-free` |
+| Paid models (opt-in) | `deepseek-flash` (V4.1 Flash), `deepseek-v4-pro` via the DeepSeek API |
 | Execution | Local / Remote / Auto |
 | Integration | OpenCode SDK |
+
+Free models by default, so a new user can run refinement without buying API credits. Both free defaults come from providers that, per OpenCode's Zen docs (checked 2026-11-18), keep no data and don't train on it. Repository code goes to the model, so don't make a free model that retains data or trains on it (e.g. `big-pickle`, `iceman-free`) a default. Zen says free models are available "for a limited time": the model id is configuration, and the worker must fall back, or fail with a clear message, when a model is withdrawn. Free-tier chat models are only served through OpenCode itself, which suits this design. Whether a worker needs an OpenCode Zen sign-in for free models is still unverified (the dev machine already had a Zen credential).
+
+DeepSeek API ids, checked against DeepSeek's pricing page on 2026-11-18: `deepseek-flash` → DeepSeek-V4.1-Flash-1017 and `deepseek-v4-pro` → DeepSeek-V4-Pro-0813.
 
 Avoid the legacy `deepseek-chat` / `deepseek-reasoner` identifiers (scheduled for discontinuation July 2026). OpenCode's official TypeScript SDK embeds its server, creates sessions, issues prompts and subscribes to events — use it rather than scraping CLI output.
 
 ### Worker topology
 
-The **agent orchestrator** assigns jobs, enforces policy and manages leases. Both the **local worker** (desktop, local Git worktree) and **cloud worker** (container, isolated Git worktree) run the OpenCode SDK against the **DeepSeek API** with per-workspace credentials and budgets.
+The **agent orchestrator** assigns jobs, enforces policy and manages leases. Both the **local worker** (desktop, local Git worktree) and **cloud worker** (container, isolated Git worktree) run the OpenCode SDK against **OpenCode's free models** by default, or the **DeepSeek API** with per-workspace credentials and budgets.
 
 ### Local vs remote
 
 | Capability | Local worker | Remote worker |
 | --- | --- | --- |
 | OpenCode harness | Yes | Yes |
-| Default DeepSeek model | Yes | Yes |
+| Default model | Yes | Yes |
 | Analyze repository | Local checkout | Isolated clone |
 | Run builds/tests | Host-restricted sandbox | Container sandbox |
 | Survive Flutter UI closing | Yes, if daemon keeps running | Yes |
@@ -117,7 +122,7 @@ An agent run persists:
 ```
 agent_run
   id, task_id, execution_target, worker_id
-  harness = "opencode", provider = "deepseek", model = "deepseek-flash"
+  harness = "opencode", provider = "opencode", model = "opencode/deepseek-v4.1-flash-free"
   session_id, repository_commit_sha, state
   started_at, completed_at
   token_usage, cost, artifact_refs, error_details
@@ -129,7 +134,7 @@ Distinct OpenCode agent policies:
 - **Implementer** — isolated worktree; can edit source and run approved tests; cannot modify protected branches or access unrestricted secrets.
 - **Reviewer** — examines changes and reports risks; never approves its own code in place of human review.
 
-Keep DeepSeek credentials on the executing worker or behind a controlled inference gateway. **Never embed API secrets in Flutter builds.**
+Keep provider credentials (OpenCode Zen, DeepSeek) on the executing worker or behind a controlled inference gateway. **Never embed API secrets in Flutter builds.**
 
 ## 6. Repository and GitHub synchronization
 
@@ -201,13 +206,14 @@ First usable release: **macOS desktop + web**, with iOS/Android targets kept in 
 
 ## 9. Default application configuration
 
-Application-level config (not an OpenCode-native file). Configure DeepSeek in OpenCode via its auth flow, per DeepSeek's OpenCode integration guide: https://api-docs.deepseek.com/quick_start/agent_integrations/opencode/
+Application-level config (not an OpenCode-native file). Free models need no DeepSeek setup. To opt into paid DeepSeek models, configure DeepSeek in OpenCode via its auth flow, per DeepSeek's OpenCode integration guide: https://api-docs.deepseek.com/quick_start/agent_integrations/opencode/
 
 ```yaml
 agent:
   default_harness: opencode
-  provider: deepseek
-  model: deepseek-flash
+  provider: opencode
+  model: opencode/deepseek-v4.1-flash-free
+  fallback_models: [opencode/glm-5.3-flash-free]
 
 execution:
   default_target: auto
@@ -227,4 +233,4 @@ implementation:
   direct_push_to_protected_branch: false
 ```
 
-**Decision:** Flutter client, TypeScript backend and worker services, OpenCode as the sole default harness, DeepSeek Flash as the default model. Local and cloud workers execute the same agent contract.
+**Decision:** Flutter client, TypeScript backend and worker services, OpenCode as the sole default harness, OpenCode's free DeepSeek V4.1 Flash as the default model (paid DeepSeek API optional). Local and cloud workers execute the same agent contract.
