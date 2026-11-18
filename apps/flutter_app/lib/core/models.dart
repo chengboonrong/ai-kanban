@@ -2,6 +2,8 @@ class User {
   User({required this.id, required this.login, required this.displayName});
   factory User.fromJson(Map<String, dynamic> j) => User(id: j['id'], login: j['login'], displayName: j['displayName']);
   final String id, login, displayName;
+
+  Map<String, dynamic> toJson() => {'id': id, 'login': login, 'displayName': displayName};
 }
 
 class BoardRef {
@@ -36,14 +38,17 @@ class BoardColumn {
 }
 
 class Board {
-  Board({required this.id, required this.name, required this.columns});
-  factory Board.fromJson(Map<String, dynamic> j) =>
-      Board(id: j['id'], name: j['name'], columns: [for (final c in j['columns']) BoardColumn.fromJson(c)]);
+  Board({required this.id, required this.name, required this.columns, this.offline = false});
+  factory Board.fromJson(Map<String, dynamic> j, {bool offline = false}) => Board(
+      id: j['id'], name: j['name'], columns: [for (final c in j['columns']) BoardColumn.fromJson(c)], offline: offline);
   final String id, name;
   final List<BoardColumn> columns;
 
+  /// True when this is the copy saved on the device because the API couldn't be reached.
+  final bool offline;
+
   /// Local mirror of the server's move semantics, for optimistic drag-and-drop.
-  Board withTaskMoved(Task task, String toColumnId, int toIndex) => Board(id: id, name: name, columns: [
+  Board withTaskMoved(Task task, String toColumnId, int toIndex) => Board(id: id, name: name, offline: offline, columns: [
         for (final c in columns)
           () {
             final tasks = c.tasks.where((t) => t.id != task.id).toList();
@@ -55,7 +60,7 @@ class Board {
   Board withColumnMoved(int from, int to) {
     final cols = [...columns];
     cols.insert(to, cols.removeAt(from));
-    return Board(id: id, name: name, columns: cols);
+    return Board(id: id, name: name, columns: cols, offline: offline);
   }
 }
 
@@ -74,4 +79,21 @@ class TaskDetail {
       TaskDetail(task: Task.fromJson(j), activity: [for (final a in j['activity']) Activity.fromJson(a)]);
   final Task task;
   final List<Activity> activity;
+}
+
+/// A task captured on this device that the server hasn't confirmed yet.
+class Draft {
+  Draft({required this.key, required this.boardId, required this.columnId, required this.title, this.error});
+  factory Draft.fromJson(Map<String, dynamic> j) =>
+      Draft(key: j['key'], boardId: j['boardId'], columnId: j['columnId'], title: j['title'], error: j['error']);
+
+  /// Idempotency key, minted at capture and reused on every retry.
+  final String key;
+  final String boardId, columnId, title;
+
+  /// Set when the server rejected the draft; it won't be retried.
+  final String? error;
+
+  Map<String, dynamic> toJson() => {'key': key, 'boardId': boardId, 'columnId': columnId, 'title': title, 'error': ?error};
+  Draft withError(String message) => Draft(key: key, boardId: boardId, columnId: columnId, title: title, error: message);
 }

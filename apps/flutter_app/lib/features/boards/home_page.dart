@@ -6,8 +6,9 @@ import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../core/widgets.dart';
 import '../auth/auth.dart';
+import '../tasks/outbox.dart';
 
-final workspacesProvider = FutureProvider<List<Workspace>>((ref) => ref.watch(apiProvider).workspaces());
+final workspacesProvider = FutureProvider<({List<Workspace> items, bool offline})>((ref) => ref.watch(apiProvider).workspaces());
 
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
@@ -42,7 +43,15 @@ class HomePage extends ConsumerWidget {
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
-            onPressed: () => runWithFeedback(context, ref.read(authProvider.notifier).logout),
+            onPressed: () async {
+              final unsent = ref.read(outboxProvider).length;
+              if (unsent > 0 &&
+                  !await confirm(context, '$unsent captured task${unsent == 1 ? ' hasn\'t' : 's haven\'t'} been sent yet. Signing out deletes ${unsent == 1 ? 'it' : 'them'}.',
+                      action: 'Sign out')) {
+                return;
+              }
+              if (context.mounted) await runWithFeedback(context, ref.read(authProvider.notifier).logout);
+            },
           ),
         ],
       ),
@@ -52,11 +61,16 @@ class HomePage extends ConsumerWidget {
         label: const Text('New workspace'),
       ),
       body: switch (workspaces) {
-        AsyncValue(:final value?) when value.isEmpty => const Center(child: Text('Create a workspace to get started.')),
+        AsyncValue(:final value?) when value.items.isEmpty => const Center(child: Text('Create a workspace to get started.')),
         AsyncValue(:final value?) => ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
             children: [
-              for (final ws in value)
+              if (value.offline)
+                const ListTile(
+                  leading: Icon(Icons.cloud_off),
+                  title: Text('Offline: showing the copy saved on this device.'),
+                ),
+              for (final ws in value.items)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 24),
                   child: Column(

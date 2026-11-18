@@ -4,11 +4,15 @@
 //          fvm flutter drive --driver test_driver/integration_test.dart --target integration_test/board_flow_test.dart -d web-server --browser-name chrome --headless
 import 'package:ai_kanban/core/api.dart';
 import 'package:ai_kanban/core/router.dart';
+import 'package:ai_kanban/core/user_store.dart';
+import 'package:ai_kanban/features/auth/auth.dart';
+import 'package:ai_kanban/features/tasks/outbox.dart';
 import 'package:ai_kanban/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -17,7 +21,9 @@ void main() {
     final login = 'it-${DateTime.now().microsecondsSinceEpoch}';
     const title = 'Add GitHub login to settings';
 
-    final container = ProviderContainer();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear(); // start signed out with no saved data
+    final container = ProviderContainer(overrides: [prefsProvider.overrideWithValue(prefs)]);
     await tester.pumpWidget(UncontrolledProviderScope(container: container, child: const App()));
     await tester.pumpAndSettle();
 
@@ -39,6 +45,11 @@ void main() {
     await tester.enterText(find.byType(TextField), login);
     await tester.tap(find.text('Sign in (dev)'));
     await settle();
+
+    // The session is saved on the device: a fresh start (new container, same storage) is still signed in.
+    final restarted = ProviderContainer(overrides: [prefsProvider.overrideWithValue(prefs)]);
+    expect(restarted.read(authProvider)?.user.login, login);
+    restarted.dispose();
 
     await tester.tap(find.text('New workspace'));
     await settle();
@@ -66,7 +77,8 @@ void main() {
     await settle();
 
     final api = container.read(apiProvider);
-    final boards = (await tester.runAsync(api.workspaces))!.single.boards;
+    expect(container.read(outboxProvider), isEmpty, reason: 'the captured task was sent');
+    final boards = (await tester.runAsync(api.workspaces))!.items.single.boards;
     final board = (await tester.runAsync(() => api.board(boards.single.id)))!;
     expect(board.columns.firstWhere((c) => c.name == 'Backlog').tasks, isEmpty);
     expect(board.columns.firstWhere((c) => c.name == 'Todo').tasks.single.title, title);

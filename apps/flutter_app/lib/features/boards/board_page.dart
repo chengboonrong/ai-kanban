@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../core/widgets.dart';
+import '../tasks/outbox.dart';
 
 class BoardNotifier extends AsyncNotifier<Board> {
   BoardNotifier(this.boardId);
@@ -26,7 +27,7 @@ class BoardNotifier extends AsyncNotifier<Board> {
         final board = await _api.board(boardId);
         if (mutation == _mutations) state = AsyncData(board); // a later mutation (and its refresh) supersedes this one
       } catch (_) {
-        // Keep the last good board on screen; the action's own error is what the caller reports.
+        // No server and no saved copy: keep what's on screen; the action's own error is what the caller reports.
       }
     }
   }
@@ -43,8 +44,7 @@ class BoardNotifier extends AsyncNotifier<Board> {
     return _mutate(() => _api.updateColumn(board.columns[from].id, position: to));
   }
 
-  Future<void> addTask(String columnId, String title, String idempotencyKey) =>
-      _mutate(() => _api.createTask(boardId, columnId: columnId, title: title, idempotencyKey: idempotencyKey));
+  Future<void> reload() => _mutate(() async {});
   Future<void> addColumn(String name) => _mutate(() => _api.addColumn(boardId, name));
   Future<void> renameColumn(String id, String name) => _mutate(() => _api.updateColumn(id, name: name));
   Future<void> deleteColumn(String id) => _mutate(() => _api.deleteColumn(id));
@@ -77,12 +77,35 @@ class BoardPage extends ConsumerWidget {
         ],
       ),
       body: board != null
-          ? _BoardView(board: board, notifier: notifier)
+          ? Column(children: [
+              if (board.offline)
+                const _Notice(icon: Icons.cloud_off, text: 'Offline: showing the copy saved on this device. New tasks are sent when the connection is back.'),
+              for (final d in ref.watch(outboxProvider).where((d) => d.boardId == boardId && d.error != null))
+                _Notice(
+                  icon: Icons.error_outline,
+                  text: 'Couldn\'t save "${d.title}": ${d.error}',
+                  action: TextButton(onPressed: () => ref.read(outboxProvider.notifier).discard(d), child: const Text('Discard')),
+                ),
+              Expanded(child: _BoardView(board: board, notifier: notifier)),
+            ])
           : async.hasError
               ? Center(child: Text(errorMessage(async.error!)))
               : const Center(child: CircularProgressIndicator()),
     );
   }
+}
+
+class _Notice extends StatelessWidget {
+  const _Notice({required this.icon, required this.text, this.action});
+  final IconData icon;
+  final String text;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: ListTile(dense: true, leading: Icon(icon), title: Text(text), trailing: action),
+      );
 }
 
 class _BoardView extends StatelessWidget {
@@ -111,7 +134,7 @@ class _BoardView extends StatelessWidget {
   }
 }
 
-class _ColumnView extends StatelessWidget {
+class _ColumnView extends ConsumerWidget {
   const _ColumnView({required this.board, required this.index, required this.notifier, required this.cardWidth});
   final Board board;
   final int index;
@@ -119,8 +142,9 @@ class _ColumnView extends StatelessWidget {
   final double cardWidth;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final column = board.columns[index];
+    final pending = ref.watch(outboxProvider).where((d) => d.columnId == column.id && d.error == null);
     final theme = Theme.of(context);
     void move(Task task, int toIndex) => runWithFeedback(context, () => notifier.moveTask(task, column.id, toIndex));
 
@@ -136,7 +160,7 @@ class _ColumnView extends StatelessWidget {
               child: const Padding(padding: EdgeInsets.all(8), child: Icon(Icons.drag_indicator, size: 20)),
             ),
             Expanded(child: Text(column.name, style: theme.textTheme.titleSmall, overflow: TextOverflow.ellipsis)),
-            Text('${column.tasks.length}', style: theme.textTheme.labelMedium),
+            Text('${column.tasks.length + pending.length}', style: theme.textTheme.labelMedium),
             PopupMenuButton<String>(
               onSelected: (choice) async {
                 if (choice == 'rename') {
@@ -166,6 +190,13 @@ class _ColumnView extends StatelessWidget {
                     if (over.any((t) => t?.id != task.id)) Divider(thickness: 3, color: theme.colorScheme.primary),
                     _TaskCard(boardId: board.id, task: task, width: cardWidth),
                   ]),
+                ),
+              for (final d in pending)
+                Card(
+                  child: ListTile(
+                    title: Text(d.title),
+                    trailing: const Tooltip(message: 'Saved on this device, waiting to sync', child: Icon(Icons.cloud_upload_outlined)),
+                  ),
                 ),
             ]),
           ),
@@ -200,7 +231,7 @@ class _TaskCard extends StatelessWidget {
   }
 }
 
-/// Quick capture: type a title, press Enter. The idempotency key survives failures so a retry can't duplicate the card.
+/// Quick capture: type a title, press Enter. The task is saved on the device at once and synced in the background.
 class _AddTaskField extends ConsumerStatefulWidget {
   const _AddTaskField({required this.boardId, required this.columnId});
   final String boardId, columnId;
@@ -212,22 +243,15 @@ class _AddTaskField extends ConsumerStatefulWidget {
 class _AddTaskFieldState extends ConsumerState<_AddTaskField> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
-  String _key = newIdempotencyKey();
-  bool _busy = false;
 
   Future<void> _submit() async {
     final title = _controller.text.trim();
-    if (title.isEmpty || _busy) return;
-    setState(() => _busy = true);
+    if (title.isEmpty) return;
     await runWithFeedback(context, () async {
-      await ref.read(boardProvider(widget.boardId).notifier).addTask(widget.columnId, title, _key);
+      await ref.read(outboxProvider.notifier).add(boardId: widget.boardId, columnId: widget.columnId, title: title);
       _controller.clear();
-      _key = newIdempotencyKey();
     });
-    if (mounted) {
-      setState(() => _busy = false);
-      _focus.requestFocus();
-    }
+    if (mounted) _focus.requestFocus();
   }
 
   @override
@@ -242,14 +266,12 @@ class _AddTaskFieldState extends ConsumerState<_AddTaskField> {
     return TextField(
       controller: _controller,
       focusNode: _focus,
-      readOnly: _busy,
-      onChanged: (_) => _key = newIdempotencyKey(), // a different title is a different task
       onSubmitted: (_) => _submit(),
       decoration: InputDecoration(
         hintText: 'Add a task…',
         isDense: true,
         border: const OutlineInputBorder(),
-        suffixIcon: IconButton(tooltip: 'Add task', icon: const Icon(Icons.add), onPressed: _busy ? null : _submit),
+        suffixIcon: IconButton(tooltip: 'Add task', icon: const Icon(Icons.add), onPressed: _submit),
       ),
     );
   }

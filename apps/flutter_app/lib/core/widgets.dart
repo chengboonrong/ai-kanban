@@ -44,14 +44,14 @@ class _PromptDialogState extends State<_PromptDialog> {
       );
 }
 
-Future<bool> confirm(BuildContext context, String message) async =>
+Future<bool> confirm(BuildContext context, String message, {String action = 'Delete'}) async =>
     await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         content: Text(message),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(action)),
         ],
       ),
     ) ??
