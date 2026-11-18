@@ -141,6 +141,11 @@ npm run service -- install                      # or keep it running in the back
 
 Pairing, the background service, the Claude Code option and troubleshooting: [docs/setup/worker.md](docs/setup/worker.md).
 
+With `"claudeInOrca": true` next to `"refiner": "claude"` in `worker.json`, each run also shows its progress in a
+terminal of the Orca app, titled after the card, in the checkout's Orca workspace. Claude Code itself still runs under
+the worker with the same restrictions, and runs go ahead without the terminal when Orca is closed. Only the local Orca
+app is supported, not remote Orca environments.
+
 In the app, connect the board to the same `owner/name` (the link icon on the board). Every new card on that board is
 then refined, by your worker, including cards teammates add (connecting a repository shares your checkout of it with
 that board). The task page shows the run live and the resulting spec, which you can approve or refine again. The
