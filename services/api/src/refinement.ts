@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type pg from 'pg';
 import specSchema from '../../../packages/contracts/refined-spec.schema.json' with { type: 'json' };
-import { httpError, sha256, tx } from './db.ts';
+import { type Db, httpError, sha256, tx } from './db.ts';
 import { boardFor, enqueueRun, logActivity, REPOSITORY, RUN } from './routes.ts';
 import { queueIssue } from './sync.ts';
 
@@ -124,13 +124,13 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
 
   app.get('/tasks/:id/refinement', { schema: { params: idParams } }, async (req) => {
     const { id } = req.params as Id;
-    await boardFor(pool, req.userId, 'task', id);
+    const boardId = await boardFor(pool, req.userId, 'task', id);
     const { rows: [run] } = await pool.query(`SELECT ${RUN('$2')} FROM agent_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, [
       id,
       req.userId,
     ]);
     const { rows: [spec] } = await pool.query(`SELECT ${SPEC} FROM specs WHERE task_id = $1 ORDER BY version DESC LIMIT 1`, [id]);
-    return { run: run ?? null, spec: spec ?? null, waiting: run?.state === 'queued' ? await waitingFor(pool, id, run.repository) : null };
+    return { run: run ?? null, spec: spec ?? null, waiting: run?.state === 'queued' ? await waitingFor(pool, boardId, run.repository) : null };
   });
 
   app.post('/runs/:id/cancel', { schema: { params: idParams } }, async (req) => {
@@ -320,6 +320,12 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       return tx(pool, async (c) => {
         // Task before run, the same order a task delete takes them in; also serialises with approve.
         await c.query('SELECT 1 FROM tasks WHERE id = (SELECT task_id FROM agent_runs WHERE id = $1) FOR UPDATE', [id]);
+        // Already handed in by this worker: a retry after the answer was lost gets the same spec, not a 409.
+        const { rows: [handedIn] } = await c.query(
+          `SELECT ${SPEC} FROM specs WHERE run_id = $1 AND EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND worker_id = $2 AND state = 'succeeded')`,
+          [id, req.workerId],
+        );
+        if (handedIn) return handedIn;
         const run = await activeRunForWorker(c, id, req.workerId);
         const { rows: [spec] } = await c.query(
           `INSERT INTO specs (task_id, run_id, version, content, repository_commit_sha)
@@ -377,22 +383,25 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
   });
 }
 
-/** Why a queued run isn't being picked up, judged from the workers of whoever connected the board's repository. */
-async function waitingFor(db: pg.Pool, taskId: string, repository: string) {
+/**
+ * Why the board's queued runs aren't being picked up, judged from the workers of whoever connected its repository.
+ * no_connector: that account is gone (the column is SET NULL), so no worker can ever claim them.
+ */
+export async function waitingFor(db: Db, boardId: string, repository: string) {
   const { rows: [w] } = await db.query(
     `SELECT u.login AS connector, CASE
+         WHEN b.repository_connected_by IS NULL THEN 'no_connector'
          WHEN NOT COALESCE(bool_or(w.online), false) THEN 'no_worker_online'
          WHEN NOT bool_or(w.online AND w.listed) THEN 'repository_not_listed'
          WHEN NOT bool_or(w.online AND w.listed AND NOT w.busy) THEN 'busy' END AS reason
-     FROM tasks t
-     JOIN boards b ON b.id = t.board_id
+     FROM boards b
      LEFT JOIN users u ON u.id = b.repository_connected_by
      LEFT JOIN LATERAL (
        SELECT ${ONLINE} AS online, $2 = ANY(repositories) AS listed,
          EXISTS (SELECT 1 FROM agent_runs r WHERE r.worker_id = x.id AND r.state = 'running') AS busy
        FROM workers x WHERE x.owner_id = b.repository_connected_by) w ON true
-     WHERE t.id = $1 GROUP BY u.login`,
-    [taskId, repository],
+     WHERE b.id = $1 GROUP BY u.login, b.repository_connected_by`,
+    [boardId, repository],
   );
   return w?.reason ? { reason: w.reason, connector: w.connector } : null;
 }

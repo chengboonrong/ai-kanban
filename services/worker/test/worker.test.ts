@@ -12,6 +12,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:http';
@@ -408,7 +409,7 @@ test('connect pairs with a code and keeps the checkouts only for the same API an
   }
 });
 
-test('SIGTERM during a job releases the run, stops the agent and exits 0', async () => {
+for (const signal of ['SIGTERM', 'SIGHUP'] as const) test(`${signal} during a job releases the run, stops the agent and exits 0`, async () => {
   const RUN = '00000000-0000-0000-0000-0000000000aa';
   let claims = 0;
   const api = await fakeApi({
@@ -427,13 +428,14 @@ test('SIGTERM during a job releases the run, stops the agent and exits 0', async
   try {
     for (const t0 = Date.now(); !existsSync(log); await sleep(50)) assert.ok(Date.now() - t0 < 15_000, 'the agent started');
     await sleep(200);
-    child.kill('SIGTERM');
+    child.kill(signal);
     const [code] = await once(child, 'exit');
     assert.equal(code, 0);
     const routes = api.requests.map((r) => r.route);
     assert.ok(routes.includes(`POST /worker/runs/${RUN}/release`));
     assert.ok(!routes.some((r) => r.endsWith('/fail') || r.endsWith('/complete')));
     assert.equal(alive(JSON.parse(readFileSync(log, 'utf8')).pid), false);
+    assert.equal(existsSync(path.join(path.dirname(config), 'worker.lock')), false, 'the lock goes with the worker');
   } finally {
     child.kill('SIGKILL');
     api.close();
@@ -476,7 +478,9 @@ test('a second start on the same config waits for the first instead of claiming;
     second = w.start();
     let out = '';
     second.stdout!.on('data', (d) => (out += d));
-    await until('the second worker says it waits', () => out.includes(`Another worker process (pid ${first.pid}) is using ${w.config}; waiting`));
+    await until('the second worker says it waits', () =>
+      out.includes(`Another worker process (pid ${first.pid}) is using ${w.config}; waiting. If no worker is running, delete ${w.lock}`),
+    );
     await sleep(1000);
     assert.equal(claims, 1, 'only the first worker claimed');
     second.kill('SIGKILL');
@@ -486,6 +490,46 @@ test('a second start on the same config waits for the first instead of claiming;
   } finally {
     first.kill('SIGKILL');
     second?.kill('SIGKILL');
+    api.close();
+  }
+});
+
+test('a lock without a pid counts as held while fresh (its owner is about to write it), and as stale once 10 s old', async () => {
+  const api = await fakeApi({ 'GET /worker/me': me, 'POST /worker/claim': () => [204] });
+  const w = worker(api, 'hang');
+  writeFileSync(w.lock, '');
+  let child = w.start();
+  try {
+    let out = '';
+    child.stdout!.on('data', (d) => (out += d));
+    await until('it waits for the fresh lock', () => out.includes(`Another worker process is using ${w.config}; waiting. If no worker is running, delete ${w.lock}`));
+    await sleep(500);
+    assert.ok(!api.requests.length, 'no claim while the lock is held');
+    child.kill('SIGKILL');
+    await once(child, 'exit');
+
+    const old = new Date(Date.now() - 20_000);
+    utimesSync(w.lock, old, old);
+    child = w.start();
+    await until('it takes the old empty lock over and claims', () => api.requests.some((r) => r.route === 'POST /worker/claim'));
+    assert.equal(readFileSync(w.lock, 'utf8'), String(child.pid));
+  } finally {
+    child.kill('SIGKILL');
+    api.close();
+  }
+});
+
+test('a worker with no repositories yet still calls in, so it shows as online', async () => {
+  const api = await fakeApi({ 'GET /worker/me': me, 'POST /worker/claim': () => [204] });
+  const child = worker(api, 'hang', { repositories: {} }).start();
+  try {
+    let out = '';
+    child.stdout!.on('data', (d) => (out += d));
+    await until('it called in', () => api.requests.some((r) => r.route === 'GET /worker/me'));
+    await until('it says what is missing', () => out.includes('No repositories allowed yet'));
+    assert.ok(!api.requests.some((r) => r.route === 'POST /worker/claim'), 'nothing to claim for');
+  } finally {
+    child.kill('SIGKILL');
     api.close();
   }
 });
@@ -509,21 +553,27 @@ test('SIGTERM while a claim is in flight hands the claimed run back without star
   }
 });
 
-test('a spec the API failed to take (503) is handed in again, not failed', async () => {
+test('a spec the API failed to take (503 for 4 s, as while it restarts) is handed in again with backoff, not failed', async () => {
   let claims = 0;
-  let completes = 0;
+  const completes: number[] = [];
   const api = await fakeApi({
     'GET /worker/me': me,
     'POST /worker/claim': () => (claims++ ? [204] : [200, { ...job, id: RUN }]),
     [`POST /worker/runs/${RUN}/events`]: () => [204],
-    [`POST /worker/runs/${RUN}/complete`]: () => (completes++ ? [200, { version: 1 }] : [503, { message: 'unavailable' }]),
+    [`POST /worker/runs/${RUN}/complete`]: () => {
+      completes.push(Date.now());
+      return completes.at(-1)! - completes[0] < 4000 ? [503, { message: 'unavailable' }] : [200, { version: 1 }];
+    },
     [`POST /worker/runs/${RUN}/fail`]: () => [204],
   });
   const child = worker(api, 'success').start();
+  let out = '';
+  child.stdout!.on('data', (d) => (out += d));
   try {
-    await until('the spec was handed in twice', () => completes === 2);
-    await sleep(200);
-    assert.equal(completes, 2);
+    await until('the spec was taken', () => out.includes('Spec v1 ready'), 20_000);
+    const gaps = completes.slice(1).map((t, i) => t - completes[i]);
+    assert.equal(gaps.length, 3, 'tried after 1, 2 and 4 s');
+    gaps.forEach((gap, i) => assert.ok(gap >= 1000 * 2 ** i && gap < 1000 * 2 ** i + 1000, `gap ${i}: ${gap} ms`));
     assert.ok(!api.requests.some((r) => r.route.endsWith('/fail')));
   } finally {
     child.kill('SIGKILL');

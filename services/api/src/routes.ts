@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { type Db, httpError, tx } from './db.ts';
+import { waitingFor } from './refinement.ts';
 
 const uuid = { type: 'string', format: 'uuid' } as const;
 const idParams = { type: 'object', required: ['id'], properties: { id: uuid } } as const;
@@ -110,7 +111,9 @@ async function loadBoard(db: Db, boardId: string) {
      WHERE board_id = $1 ORDER BY position`,
     [boardId],
   );
-  return { ...board, columns: columns.map((col) => ({ ...col, tasks: tasks.filter((t) => t.columnId === col.id) })) };
+  // One reason for the whole board: it depends only on the board's connector and repository, not on the card.
+  const waiting = board?.repository && tasks.some((t) => t.refinement === 'queued') ? await waitingFor(db, boardId, board.repository) : null;
+  return { ...board, waiting, columns: columns.map((col) => ({ ...col, tasks: tasks.filter((t) => t.columnId === col.id) })) };
 }
 
 export const logActivity = (db: Db, taskId: string, actorId: string, kind: string, data: object = {}) =>

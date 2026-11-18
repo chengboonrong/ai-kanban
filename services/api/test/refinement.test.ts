@@ -122,7 +122,8 @@ test('a run streams events, stores a validated spec version, and the latest vers
 
   const v1 = (await worker('POST', `/worker/runs/${run.id}/complete`, done())).json();
   assert.equal(v1.version, 1);
-  assert.equal((await worker('POST', `/worker/runs/${run.id}/complete`, done())).statusCode, 409, 'a repeated completion adds nothing');
+  const again = await worker('POST', `/worker/runs/${run.id}/complete`, done());
+  assert.deepEqual([again.statusCode, again.json().id, again.json().version], [200, v1.id, 1], 'a repeated completion adds nothing');
   assert.equal(await refinementOf(api, board.id, task.id), 'ready');
   const lastId = polled.events.at(-1).id;
   const final = (await api('GET', `/runs/${run.id}/events?after=${lastId}`)).json();
@@ -504,6 +505,60 @@ test('a queued run says why it waits', async () => {
   assert.deepEqual(await waiting(second.id), { reason: 'busy', connector });
   await worker('POST', `/worker/runs/${run.id}/complete`, done());
   assert.equal(await waiting(second.id), null, 'a free worker lists it: it is about to be claimed');
+});
+
+test('the board says why its queued runs wait, with one lookup however many cards wait', async () => {
+  const { api, board, repository, worker } = await fixture();
+  const connector = (await api('GET', '/me')).json().login;
+  const boardWaiting = async () => (await api('GET', `/boards/${board.id}`)).json().waiting;
+  assert.equal(await boardWaiting(), null, 'nothing queued');
+  await api('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' });
+  assert.deepEqual(await boardWaiting(), { reason: 'no_worker_online', connector });
+  await claim(worker, 'acme/other');
+  assert.deepEqual(await boardWaiting(), { reason: 'repository_not_listed', connector });
+
+  const queriesFor = async (url: string) => {
+    const query = pool.query;
+    let n = 0;
+    pool.query = ((...args: Parameters<typeof query>) => (n++, query.apply(pool, args))) as typeof query;
+    try {
+      assert.equal((await api('GET', url)).statusCode, 200);
+    } finally {
+      pool.query = query;
+    }
+    return n;
+  };
+  const one = await queriesFor(`/boards/${board.id}`);
+  assert.ok(one > 0);
+  await api('POST', `/boards/${board.id}/tasks`, { title: 'Show task counts' });
+  await api('POST', `/boards/${board.id}/tasks`, { title: 'Dark mode' });
+  assert.equal(await queriesFor(`/boards/${board.id}`), one, 'no query per queued card');
+
+  await claim(worker, repository);
+  assert.deepEqual(await boardWaiting(), { reason: 'busy', connector }, 'the other cards still wait');
+});
+
+test('a board whose connector is gone says so: no worker can take its runs', async () => {
+  const { api, board } = await fixture();
+  const task = (await api('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' })).json();
+  await pool.query('UPDATE boards SET repository_connected_by = NULL WHERE id = $1', [board.id]); // ON DELETE SET NULL
+  const expected = { reason: 'no_connector', connector: null };
+  assert.deepEqual((await api('GET', `/tasks/${task.id}/refinement`)).json().waiting, expected);
+  assert.deepEqual((await api('GET', `/boards/${board.id}`)).json().waiting, expected);
+});
+
+test('handing a spec in again after a lost answer returns it; nobody else can', async () => {
+  const { api, board, repository, worker } = await fixture();
+  const other = await registerWorker(api);
+  await api('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' });
+  const run = (await claim(worker, repository)).json();
+  const first = (await worker('POST', `/worker/runs/${run.id}/complete`, done())).json();
+  const retried = await worker('POST', `/worker/runs/${run.id}/complete`, done(spec('Something else')));
+  assert.equal(retried.statusCode, 200);
+  assert.deepEqual(retried.json(), first, 'the spec already stored, not a second version');
+  assert.equal((await other('POST', `/worker/runs/${run.id}/complete`, done())).statusCode, 409, "another worker's run");
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM specs WHERE run_id = $1', [run.id]);
+  assert.equal(rows[0].n, 1);
 });
 
 test('the harness is stored, and only the owner sees which worker ran it', async () => {

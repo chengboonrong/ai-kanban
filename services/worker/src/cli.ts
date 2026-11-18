@@ -154,10 +154,14 @@ async function lockConfig() {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
     }
     const pid = Number(await readFile(lock, 'utf8').catch(() => ''));
-    // A lock from before the last boot is stale even if its pid now names another process.
-    const sinceBoot = ((await stat(lock).catch(() => undefined))?.mtimeMs ?? 0) > Date.now() - os.uptime() * 1000;
-    if (pid && sinceBoot && alive(pid)) {
-      if (!waiting) console.log(`Another worker process (pid ${pid}) is using ${CONFIG}; waiting`);
+    const mtime = (await stat(lock).catch(() => undefined))?.mtimeMs ?? 0;
+    // A lock from before the last boot is stale even if its pid now names another process. One without a pid may be
+    // between its owner creating it and writing to it, so it counts as held until it is 10 s old.
+    const held = pid ? mtime > Date.now() - os.uptime() * 1000 && alive(pid) : mtime > Date.now() - 10_000;
+    if (held) {
+      if (!waiting) {
+        console.log(`Another worker process${pid ? ` (pid ${pid})` : ''} is using ${CONFIG}; waiting. If no worker is running, delete ${lock}`);
+      }
       waiting = true;
       await sleep(10_000);
     } else {
@@ -192,7 +196,7 @@ async function start() {
     await opencode?.then((o) => o.server.close(), () => {}); // its own process; don't leave it behind
     process.exit(0);
   };
-  process.once('SIGINT', stop).once('SIGTERM', stop);
+  process.once('SIGINT', stop).once('SIGTERM', stop).once('SIGHUP', stop); // SIGHUP: its terminal was closed
   await lockConfig();
 
   let said = '';
@@ -204,7 +208,13 @@ async function start() {
     const repositories = Object.keys(config?.repositories ?? {}).map((r) => r.toLowerCase()); // GitHub names are case-insensitive
     if (!config) say(`No config at ${CONFIG}; run: connect <code>`);
     else if (config.token === rejected) say('The API rejected this worker (removed?); run: connect <code>');
-    else if (!repositories.length) say('No repositories allowed yet; run: checkouts, or allow <owner/name> <path>');
+    else if (!repositories.length) {
+      say('No repositories allowed yet; run: checkouts, or allow <owner/name> <path>');
+      // Calling in keeps it online, so the app says its repositories are missing rather than that it is offline.
+      const me = await call(config, 'GET', '/worker/me').catch(() => undefined);
+      if (me?.status === 401) rejected = config.token;
+      else if (me?.status === 200) checked = config.token;
+    }
     if (!config || config.token === rejected || !repositories.length) {
       await sleep(10_000);
       continue;
@@ -250,6 +260,7 @@ async function runJob(config: Config, job: Job, ac: AbortController) {
   // Nothing that leaves the worker (events, errors, the spec) carries this machine's paths.
   const clean = async (text: string) => scrub(dir || '/nonexistent', work ? await scrub(work, text) : text);
   const pending: RunEvent[] = [];
+  let renewed = Date.now(); // the lease (90 s) runs from the claim, then from each event batch the API took
   // One upload at a time, so events reach the API in order. An empty batch is a heartbeat that still learns about
   // a cancel (409) or a revoked worker (401) while the model is thinking. A failed batch is retried with the next one.
   let uploads = Promise.resolve();
@@ -271,6 +282,7 @@ async function runJob(config: Config, job: Job, ac: AbortController) {
               pending.unshift(...batch);
               throw new Error(`the API answered ${res.status}`);
             }
+            if (res.status === 204) renewed = Date.now();
             if (res.status === 409) ac.abort(new Error('cancelled'));
             if (res.status === 401) ac.abort(new Error('this worker was removed'));
             if (res.status !== 204) return;
@@ -317,10 +329,16 @@ async function runJob(config: Config, job: Job, ac: AbortController) {
     clearInterval(ticker);
     await flush().catch(() => {}); // progress lines are nice to have; the spec isn't
     let res: Awaited<ReturnType<typeof call>>;
-    for (let attempt = 1; ; attempt++) {
-      res = await call(config, 'POST', `/worker/runs/${job.id}/complete`, { ...result, spec, commitSha }).catch((e: Error) => ({ status: 0, body: e.message }));
-      if ((res.status && res.status < 500) || attempt === 3) break;
-      await sleep(attempt * 1000);
+    // No answer or a 5xx (the API restarting, say) is retried until 75 s into the lease: a spec thrown away costs a
+    // whole new refinement. A repeat after a lost answer is safe; the API returns the spec it already stored.
+    for (let delay = 1000; ; delay = Math.min(delay * 2, 10_000)) {
+      const timeout = Math.max(5000, Math.min(30_000, renewed + 85_000 - Date.now())); // each try ends inside the lease
+      res = await call(config, 'POST', `/worker/runs/${job.id}/complete`, { ...result, spec, commitSha }, timeout).catch((e: Error) => ({
+        status: 0,
+        body: e.message,
+      }));
+      if ((res.status && res.status < 500) || Date.now() + delay > renewed + 75_000) break;
+      await sleep(delay);
     }
     if (res.status === 200) return console.log(`Spec v${res.body.version} ready for "${job.task.title}"`);
     if (res.status === 409) return console.log('Run was cancelled; result discarded');
