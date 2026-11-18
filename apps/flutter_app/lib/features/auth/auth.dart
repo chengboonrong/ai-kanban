@@ -41,10 +41,11 @@ class AuthNotifier extends Notifier<Session?> {
     try {
       await Api.create(token: session.token).logout();
     } finally {
-      // Sign out locally even if the server is unreachable.
-      await UserStore(_prefs, session.user.id).clear();
-      await _prefs.remove('session');
+      // Sign out locally even if the server is unreachable. Drop the session first so nothing still running for it
+      // writes data back after the wipe.
       state = null;
+      await _prefs.remove('session');
+      await UserStore(_prefs, session.user.id).clear();
     }
   }
 

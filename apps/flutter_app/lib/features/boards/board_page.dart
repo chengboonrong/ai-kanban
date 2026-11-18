@@ -50,7 +50,8 @@ class BoardNotifier extends AsyncNotifier<Board> {
   Future<void> deleteColumn(String id) => _mutate(() => _api.deleteColumn(id));
 }
 
-final boardProvider = AsyncNotifierProvider.family<BoardNotifier, Board, String>(BoardNotifier.new);
+// autoDispose: a board lives only while a screen shows it, so the previous user's board can't linger after sign-out.
+final boardProvider = AsyncNotifierProvider.autoDispose.family<BoardNotifier, Board, String>(BoardNotifier.new);
 
 class BoardPage extends ConsumerWidget {
   const BoardPage({super.key, required this.boardId});

@@ -29,6 +29,9 @@ class Api {
     final dio = Dio(BaseOptions(
       baseUrl: apiUrl,
       connectTimeout: const Duration(seconds: 10),
+      // Without these a request on a dead connection never ends (and would stall the outbox); a timeout counts as offline.
+      sendTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
       headers: {if (token != null) 'authorization': 'Bearer $token'},
     ));
     dio.interceptors.add(InterceptorsWrapper(onError: (e, handler) {

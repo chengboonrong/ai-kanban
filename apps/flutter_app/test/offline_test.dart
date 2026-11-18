@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:ai_kanban/core/api.dart';
 import 'package:ai_kanban/core/user_store.dart';
+import 'package:ai_kanban/features/auth/auth.dart';
 import 'package:ai_kanban/features/tasks/outbox.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -71,6 +72,26 @@ void main() {
     expect(c.read(outboxProvider).single.error, 'columnId is not on this board');
     await outbox.discard(c.read(outboxProvider).single);
     expect(c.read(outboxProvider), isEmpty);
+  });
+
+  test('a session that ends mid-send keeps the remaining drafts and sends nothing with the old token', () async {
+    final api = FakeApi();
+    final c = await start(api);
+    final outbox = c.read(outboxProvider.notifier);
+    api.next = (_) => offline;
+    for (final title in ['one', 'two', 'three']) {
+      await outbox.add(boardId: 'b', columnId: 'c', title: title);
+    }
+    await outbox.flush();
+    api.next = (title) {
+      if (title == 'one') c.read(authProvider.notifier).clear(); // session expires while 'one' is in flight
+      return null;
+    };
+    await outbox.flush();
+    expect(api.sent.map((s) => s.$1), ['one'], reason: 'stopped once the session ended');
+    final saved = (await SharedPreferences.getInstance()).getString('u:u1:outbox')!;
+    expect([for (final d in jsonDecode(saved)) d['title']], ['one', 'two', 'three'],
+        reason: "kept for the next sign-in; 'one' is resent with the same key and the server returns the existing task");
   });
 
   test('board reads fall back to the saved copy only when offline, and only for the same user', () async {

@@ -8,7 +8,9 @@ import '../../core/widgets.dart';
 import '../auth/auth.dart';
 import '../tasks/outbox.dart';
 
-final workspacesProvider = FutureProvider<({List<Workspace> items, bool offline})>((ref) => ref.watch(apiProvider).workspaces());
+// autoDispose: the list lives only while the home screen shows it, so it can't outlive the session that loaded it.
+final workspacesProvider =
+    FutureProvider.autoDispose<({List<Workspace> items, bool offline})>((ref) => ref.watch(apiProvider).workspaces());
 
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
