@@ -212,11 +212,15 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
           type: 'object',
           required: ['repositories'],
           additionalProperties: false,
-          properties: { repositories: { type: 'array', maxItems: 200, items: { ...REPOSITORY, type: 'string' } } },
+          properties: {
+            repositories: { type: 'array', maxItems: 200, items: { ...REPOSITORY, type: 'string' } },
+            harness: { enum: ['opencode', 'claude-code'] }, // which agent this worker refines with, shown while it runs
+          },
         },
       },
     },
     async (req, reply) => {
+      const { harness = 'opencode' } = req.body as { harness?: string };
       const repositories = (req.body as { repositories: string[] }).repositories.map((r) => r.toLowerCase());
       await pool.query('UPDATE workers SET repositories = $2 WHERE id = $1', [req.workerId, repositories]);
       // A worker runs one job at a time, so a run still running on it was lost in a crash: retry it now, not after the lease.
@@ -227,7 +231,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       // The repository check also drops a run queued just as the board was pointed elsewhere.
       // ponytail: per-person workers; shared team workers need workspace opt-in plus GitHub access checks (Milestones 4-5).
       const { rows: [run] } = await pool.query(
-        `UPDATE agent_runs SET state = 'running', worker_id = $1, started_at = now(), lease_until = ${LEASE}
+        `UPDATE agent_runs SET state = 'running', worker_id = $1, started_at = now(), lease_until = ${LEASE}, harness = $4
          WHERE id = (
            SELECT r.id FROM agent_runs r
            JOIN tasks t ON t.id = r.task_id
@@ -236,7 +240,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
            WHERE r.state = 'queued' AND b.repository_connected_by = $2 AND b.repository = r.repository AND r.repository = ANY($3)
            ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED)
          RETURNING id, task_id, repository`,
-        [req.workerId, req.userId, repositories],
+        [req.workerId, req.userId, repositories, harness],
       );
       if (!run) return reply.code(204).send();
       const { rows: [task] } = await pool.query('SELECT title, description FROM tasks WHERE id = $1', [run.task_id]);
@@ -305,7 +309,6 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
             ...finish,
             tokenUsage: { type: 'object' },
             cost: { type: 'number', minimum: 0 },
-            harness: { enum: ['opencode', 'claude-code'] },
             spec: specSchema,
           },
         },
@@ -313,7 +316,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
     },
     async (req) => {
       const { id } = req.params as Id;
-      const b = req.body as { model: string; sessionId?: string; commitSha: string; tokenUsage?: object; cost?: number; harness?: string; spec: object };
+      const b = req.body as { model: string; sessionId?: string; commitSha: string; tokenUsage?: object; cost?: number; spec: object };
       return tx(pool, async (c) => {
         // Task before run, the same order a task delete takes them in; also serialises with approve.
         await c.query('SELECT 1 FROM tasks WHERE id = (SELECT task_id FROM agent_runs WHERE id = $1) FOR UPDATE', [id]);
@@ -325,8 +328,8 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
         );
         await c.query(
           `UPDATE agent_runs SET state = 'succeeded', completed_at = now(), model = $2, session_id = $3, repository_commit_sha = $4,
-             token_usage = $5, cost = $6, harness = $7 WHERE id = $1`,
-          [id, b.model, b.sessionId ?? null, b.commitSha, b.tokenUsage ?? null, b.cost ?? null, b.harness ?? 'opencode'],
+             token_usage = $5, cost = $6 WHERE id = $1`,
+          [id, b.model, b.sessionId ?? null, b.commitSha, b.tokenUsage ?? null, b.cost ?? null],
         );
         await logActivity(c, run.task_id, run.requested_by, 'spec_ready', { version: spec.version });
         return spec;

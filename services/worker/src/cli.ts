@@ -165,7 +165,8 @@ async function start() {
     const refiner = config.refiner === 'claude' ? `Claude Code${config.claudeModel ? ` (${config.claudeModel})` : ''}` : `OpenCode (${config.models.join(', ')})`;
     say(`Worker "${config.name}" polling ${config.apiUrl} for ${repositories.join(', ')} with ${refiner}`);
 
-    const claim = await call(config, 'POST', '/worker/claim', { repositories }).catch((e: Error) => ({ status: 0, body: e.message }));
+    const harness = config.refiner === 'claude' ? 'claude-code' : 'opencode';
+    const claim = await call(config, 'POST', '/worker/claim', { repositories, harness }).catch((e: Error) => ({ status: 0, body: e.message }));
     if (claim.status === 200) {
       const ac = new AbortController();
       current = { id: claim.body.id, ac, done: runJob(config, claim.body, ac) };
@@ -254,7 +255,7 @@ async function runJob(config: Config, job: Job, ac: AbortController) {
     const spec = JSON.parse(await clean(JSON.stringify(result.spec))); // models copy absolute paths into prose
     clearInterval(ticker);
     await flush().catch(() => {}); // progress lines are nice to have; the spec isn't
-    const res = await call(config, 'POST', `/worker/runs/${job.id}/complete`, { ...result, spec, commitSha, harness });
+    const res = await call(config, 'POST', `/worker/runs/${job.id}/complete`, { ...result, spec, commitSha });
     if (res.status === 200) return console.log(`Spec v${res.body.version} ready for "${job.task.title}"`);
     if (res.status === 409) return console.log('Run was cancelled; result discarded');
     throw new Error(`the API rejected the spec (${res.status}): ${JSON.stringify(res.body).slice(0, 1000)}`);

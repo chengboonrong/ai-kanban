@@ -489,11 +489,12 @@ test('a queued run says why it waits', async () => {
 test('the harness is stored, and only the owner sees which worker ran it', async () => {
   const { api, board, repository, worker } = await fixture();
   const task = (await api('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' })).json();
-  const run = (await claim(worker, repository)).json();
-  assert.equal((await worker('POST', `/worker/runs/${run.id}/complete`, { ...done(), harness: 'orca' })).statusCode, 400);
-  assert.equal((await worker('POST', `/worker/runs/${run.id}/complete`, { ...done(), harness: 'claude-code' })).statusCode, 200);
+  assert.equal((await worker('POST', '/worker/claim', { repositories: [repository], harness: 'orca' })).statusCode, 400);
+  const run = (await worker('POST', '/worker/claim', { repositories: [repository], harness: 'claude-code' })).json();
   const mine = await latestRun(api, task.id);
-  assert.deepEqual([mine.harness, mine.workerName], ['claude-code', 'My Mac']);
+  assert.deepEqual([mine.state, mine.harness, mine.workerName], ['running', 'claude-code', 'My Mac'], 'known while it runs');
+  assert.equal((await worker('POST', `/worker/runs/${run.id}/complete`, done())).statusCode, 200);
+  assert.equal((await latestRun(api, task.id)).harness, 'claude-code');
 
   const bob = await user();
   const { rows: [b] } = await pool.query('SELECT workspace_id FROM boards WHERE id = $1', [board.id]);
