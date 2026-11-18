@@ -114,6 +114,10 @@ fvm flutter test integration_test/board_flow_test.dart -d macos        # end-to-
 fvm flutter test integration_test/refinement_flow_test.dart -d macos   # refinement UI, with the test playing the worker
 ```
 
+`apps/flutter_app/tool/acceptance.sh` runs both end-to-end flows in one go (macOS): it starts Postgres, reuses an API
+already on `:8080` or starts one for the run, then drives the app. It's local only; CI runs lint (`npm run lint` at the
+repo root), `dart format`, the analyzer, and the unit and API tests.
+
 ### Refining tasks with a local worker
 
 The worker reads repositories already checked out on your machine and needs the `opencode` CLI installed. It uses
