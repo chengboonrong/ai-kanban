@@ -1,0 +1,22 @@
+{
+  "name": "@ai-kanban/worker",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "register": "node src/cli.ts register",
+    "allow": "node src/cli.ts allow",
+    "start": "node src/cli.ts start",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.19.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
