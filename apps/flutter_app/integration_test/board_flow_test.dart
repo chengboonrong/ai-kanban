@@ -1,0 +1,78 @@
+// Drives the real app against a running API (cd services/api && npm run dev).
+//   macOS: fvm flutter test integration_test -d macos
+//   web:   chromedriver --port=4444 &  then
+//          fvm flutter drive --driver test_driver/integration_test.dart --target integration_test/board_flow_test.dart -d web-server --browser-name chrome --headless
+import 'package:ai_kanban/core/api.dart';
+import 'package:ai_kanban/main.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
+
+void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('create a board, capture a five-word task, move it between columns', (tester) async {
+    final login = 'it-${DateTime.now().microsecondsSinceEpoch}';
+    const title = 'Add GitHub login to settings';
+
+    final container = ProviderContainer();
+    await tester.pumpWidget(UncontrolledProviderScope(container: container, child: const App()));
+    await tester.pumpAndSettle();
+
+    Future<void> settle() async {
+      // Network calls complete outside the fake clock; give them real time, then let frames settle.
+      for (var i = 0; i < 20; i++) {
+        await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 50)));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> prompt(String text) async {
+      await tester.enterText(find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)), text);
+      await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.byType(FilledButton)));
+      await settle();
+    }
+
+    await tester.enterText(find.byType(TextField), login);
+    await tester.tap(find.text('Sign in (dev)'));
+    await settle();
+
+    await tester.tap(find.text('New workspace'));
+    await settle();
+    await prompt('Integration');
+    await tester.tap(find.text('New board'));
+    await settle();
+    await prompt('Roadmap');
+    expect(find.text('Backlog'), findsOneWidget);
+    expect(find.text('Todo'), findsOneWidget);
+
+    await tester.enterText(find.widgetWithText(TextField, 'Add a task…').first, title);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await settle();
+    expect(find.text(title), findsOneWidget);
+
+    // Drag the card onto the "Todo" column.
+    final card = tester.getCenter(find.text(title));
+    final todo = tester.getCenter(find.text('Todo'));
+    final gesture = await tester.startGesture(card);
+    await gesture.moveBy(const Offset(20, 0));
+    await tester.pump();
+    await gesture.moveTo(todo + const Offset(0, 120));
+    await tester.pump();
+    await gesture.up();
+    await settle();
+
+    final api = container.read(apiProvider);
+    final boards = (await tester.runAsync(api.workspaces))!.single.boards;
+    final board = (await tester.runAsync(() => api.board(boards.single.id)))!;
+    expect(board.columns.firstWhere((c) => c.name == 'Backlog').tasks, isEmpty);
+    expect(board.columns.firstWhere((c) => c.name == 'Todo').tasks.single.title, title);
+
+    // The detail page shows the move in the activity history.
+    await tester.tap(find.text(title));
+    await settle();
+    expect(find.textContaining('moved it from Backlog to Todo'), findsOneWidget);
+  });
+}
