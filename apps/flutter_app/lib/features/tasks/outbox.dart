@@ -25,7 +25,10 @@ class OutboxNotifier extends Notifier<List<Draft>> {
     _store = UserStore(ref.watch(prefsProvider), session.user.id);
     final retry = Timer.periodic(const Duration(seconds: 30), (_) => flush());
     ref.onDispose(retry.cancel);
-    final drafts = [for (final d in (_store!.read('outbox') as List?) ?? const []) Draft.fromJson(d)];
+    final drafts = [
+      for (final d in (_store!.read('outbox') as List?) ?? const [])
+        Draft.fromJson(d),
+    ];
     if (drafts.isNotEmpty) Future.microtask(flush);
     return drafts;
   }
@@ -35,12 +38,27 @@ class OutboxNotifier extends Notifier<List<Draft>> {
     await _store?.write('outbox', [for (final d in drafts) d.toJson()]);
   }
 
-  Future<void> add({required String boardId, required String columnId, required String title}) async {
-    await _set([...state, Draft(key: newIdempotencyKey(), boardId: boardId, columnId: columnId, title: title)]);
-    unawaited(flush()); // the draft is safe on the device; sending happens in the background
+  Future<void> add({
+    required String boardId,
+    required String columnId,
+    required String title,
+  }) async {
+    await _set([
+      ...state,
+      Draft(
+        key: newIdempotencyKey(),
+        boardId: boardId,
+        columnId: columnId,
+        title: title,
+      ),
+    ]);
+    unawaited(
+      flush(),
+    ); // the draft is safe on the device; sending happens in the background
   }
 
-  Future<void> discard(Draft draft) => _set([...state.where((d) => d.key != draft.key)]);
+  Future<void> discard(Draft draft) =>
+      _set([...state.where((d) => d.key != draft.key)]);
 
   /// Sends unsent drafts in capture order; concurrent calls in one session share one run.
   Future<void> flush() {
@@ -63,19 +81,37 @@ class OutboxNotifier extends Notifier<List<Draft>> {
       final draft = state.where((d) => d.error == null).firstOrNull;
       if (draft == null) return;
       try {
-        await api.createTask(draft.boardId, columnId: draft.columnId, title: draft.title, idempotencyKey: draft.key);
+        await api.createTask(
+          draft.boardId,
+          columnId: draft.columnId,
+          title: draft.title,
+          idempotencyKey: draft.key,
+        );
       } on DioException catch (e) {
         final status = e.response?.statusCode ?? 0;
-        if (isOffline(e) || const {401, 408, 429}.contains(status) || status >= 500) return; // try again later
-        if (current()) await _set([for (final d in state) d.key == draft.key ? d.withError(errorMessage(e)) : d]);
+        if (isOffline(e) ||
+            const {401, 408, 429}.contains(status) ||
+            status >= 500) {
+          return; // try again later
+        }
+        if (current()) {
+          await _set([
+            for (final d in state)
+              d.key == draft.key ? d.withError(errorMessage(e)) : d,
+          ]);
+        }
         continue; // a rejected draft must not block the ones behind it
       }
       if (!current()) return;
       // Fetch the board first so the server's card replaces the draft without blinking out.
-      if (ref.read(boardProvider(draft.boardId).exists)) await ref.read(boardProvider(draft.boardId).notifier).reload();
+      if (ref.read(boardProvider(draft.boardId).exists)) {
+        await ref.read(boardProvider(draft.boardId).notifier).reload();
+      }
       if (current()) await _set([...state.where((d) => d.key != draft.key)]);
     }
   }
 }
 
-final outboxProvider = NotifierProvider<OutboxNotifier, List<Draft>>(OutboxNotifier.new);
+final outboxProvider = NotifierProvider<OutboxNotifier, List<Draft>>(
+  OutboxNotifier.new,
+);

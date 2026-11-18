@@ -23,18 +23,25 @@ final routerProvider = Provider<GoRouter>((ref) {
     },
     routes: [
       GoRoute(path: '/login', builder: (_, _) => const LoginPage()),
-      GoRoute(path: '/', builder: (_, _) => const HomePage(), routes: [
-        GoRoute(
-          path: 'boards/:boardId',
-          builder: (_, s) => BoardPage(boardId: s.pathParameters['boardId']!),
-          routes: [
-            GoRoute(
-              path: 'tasks/:taskId',
-              builder: (_, s) => TaskPage(boardId: s.pathParameters['boardId']!, taskId: s.pathParameters['taskId']!),
-            ),
-          ],
-        ),
-      ]),
+      GoRoute(
+        path: '/',
+        builder: (_, _) => const HomePage(),
+        routes: [
+          GoRoute(
+            path: 'boards/:boardId',
+            builder: (_, s) => BoardPage(boardId: s.pathParameters['boardId']!),
+            routes: [
+              GoRoute(
+                path: 'tasks/:taskId',
+                builder: (_, s) => TaskPage(
+                  boardId: s.pathParameters['boardId']!,
+                  taskId: s.pathParameters['taskId']!,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     ],
   );
 });

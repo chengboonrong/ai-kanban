@@ -9,7 +9,8 @@ import '../../core/user_store.dart';
 
 class Session {
   Session({required this.token, required this.user});
-  factory Session.fromJson(Map<String, dynamic> j) => Session(token: j['token'], user: User.fromJson(j['user']));
+  factory Session.fromJson(Map<String, dynamic> j) =>
+      Session(token: j['token'], user: User.fromJson(j['user']));
   final String token;
   final User user;
 

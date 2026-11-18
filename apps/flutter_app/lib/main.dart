@@ -9,7 +9,12 @@ import 'features/tasks/outbox.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  runApp(ProviderScope(overrides: [prefsProvider.overrideWithValue(prefs)], child: const App()));
+  runApp(
+    ProviderScope(
+      overrides: [prefsProvider.overrideWithValue(prefs)],
+      child: const App(),
+    ),
+  );
 }
 
 class App extends ConsumerWidget {
@@ -17,12 +22,18 @@ class App extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen(outboxProvider, (_, _) {}); // keep the outbox (and its retry timer) alive on every screen
+    ref.listen(
+      outboxProvider,
+      (_, _) {},
+    ); // keep the outbox (and its retry timer) alive on every screen
     return MaterialApp.router(
       title: 'AI Kanban',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.indigo),
-      darkTheme: ThemeData(colorSchemeSeed: Colors.indigo, brightness: Brightness.dark),
+      darkTheme: ThemeData(
+        colorSchemeSeed: Colors.indigo,
+        brightness: Brightness.dark,
+      ),
       routerConfig: ref.watch(routerProvider),
     );
   }

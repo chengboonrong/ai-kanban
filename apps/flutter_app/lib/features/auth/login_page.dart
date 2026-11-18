@@ -22,7 +22,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       _error = null;
     });
     try {
-      await ref.read(authProvider.notifier).devLogin(_login.text.trim().toLowerCase());
+      await ref
+          .read(authProvider.notifier)
+          .devLogin(_login.text.trim().toLowerCase());
     } catch (e) {
       if (mounted) setState(() => _error = errorMessage(e));
     } finally {
@@ -51,20 +53,33 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               children: [
                 Text('AI Kanban', style: theme.textTheme.headlineMedium),
                 const SizedBox(height: 8),
-                Text('Local development sign-in. The API must be running with AUTH_MODE=dev.',
-                    style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                Text(
+                  'Local development sign-in. The API must be running with AUTH_MODE=dev.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
                 const SizedBox(height: 24),
                 TextField(
                   controller: _login,
-                  decoration: const InputDecoration(labelText: 'Login', border: OutlineInputBorder()),
+                  decoration: const InputDecoration(
+                    labelText: 'Login',
+                    border: OutlineInputBorder(),
+                  ),
                   onSubmitted: (_) => _submit(),
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 8),
-                  Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+                  Text(
+                    _error!,
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
                 ],
                 const SizedBox(height: 16),
-                FilledButton(onPressed: _busy ? null : _submit, child: const Text('Sign in (dev)')),
+                FilledButton(
+                  onPressed: _busy ? null : _submit,
+                  child: const Text('Sign in (dev)'),
+                ),
               ],
             ),
           ),
