@@ -70,7 +70,7 @@ Linux and Windows: run `npm start` under your own service manager.
   repository code goes to Anthropic under your account's terms. The worker runs
   `claude -p --restricted --strict-mcp-config --tools Read,Glob,Grep …` in the exported folder: no shell, no edits, no
   web tools, no MCP servers, no hooks or skills, and reads outside the folder are refused. It refuses to run if Claude
-  Code ever starts with more than that. A short test run used about $0.13 of plan usage; a real refinement uses more.
+  Code ever starts with more than that, and stops it if it calls any other tool. A short test run used about $0.13 of plan usage; a real refinement uses more.
 
 Orca isn't used to run the agent: it can't pass those restrictions, so an agent it launched would load your own MCP
 servers, skills and plugins.

@@ -203,6 +203,9 @@ if (mode === 'success') process.stdout.write(fs.readFileSync(${JSON.stringify(fi
 else if (mode === 'tools' || mode === 'mcp')
   out(mode === 'tools' ? { ...init, tools: [...init.tools, 'Bash'] } : { ...init, mcp_servers: [{ name: 'mail', status: 'connected' }] }),
     setTimeout(() => out({ type: 'result', subtype: 'success', structured_output: {} }), 1000);
+else if (mode === 'stray')
+  out(init), out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__claude_ai_Mail__send', input: {} }] } }),
+    setTimeout(() => out({ type: 'result', subtype: 'success', structured_output: {} }), 1000);
 else if (mode === 'error') out(init), out({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 401 Invalid authentication credentials' });
 else out(init);
 if (mode === 'stubborn') process.on('SIGTERM', () => {});
@@ -297,12 +300,38 @@ test('refineWithClaude runs claude in the export with a clean environment and re
   }
 });
 
+test('refineWithClaude never runs a claude committed in the export, even with . or an empty entry on the PATH', async () => {
+  const saved = process.env.PATH!;
+  const dir = tmp();
+  const marker = path.join(tmp(), 'hijacked');
+  writeFileSync(path.join(dir, 'claude'), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`);
+  chmodSync(path.join(dir, 'claude'), 0o755);
+  process.env.PATH = `${path.delimiter}.${path.delimiter}${saved}`;
+  process.env.FAKE_CLAUDE = 'success';
+  process.env.FAKE_CLAUDE_LOG = path.join(tmp(), 'claude.json');
+  try {
+    await refineWithClaude({ dir, job, commitSha: 'abc', signal: new AbortController().signal, onEvent: () => {} });
+    assert.ok(!existsSync(marker), 'the committed claude ran');
+    const env = JSON.parse(readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8')).env;
+    assert.ok(env.PATH.split(path.delimiter).every((p: string) => path.isAbsolute(p)));
+  } finally {
+    process.env.PATH = saved;
+  }
+});
+
 test('refineWithClaude refuses a claude that starts with more tools or an MCP server, and kills it', async () => {
   for (const mode of ['tools', 'mcp']) {
     const { result, started } = await claude(mode);
     await assert.rejects(result, /tools beyond Read\/Glob\/Grep; refusing to run/);
     assert.equal(alive(started().pid), false);
   }
+});
+
+test('refineWithClaude stops a claude that calls a tool it did not start with', async () => {
+  const { result, events, started } = await claude('stray');
+  await assert.rejects(result, /called a tool beyond Read\/Glob\/Grep; stopped it/);
+  assert.equal(alive(started().pid), false);
+  assert.deepEqual(events, [{ kind: 'model', data: { model: 'm' } }]);
 });
 
 test('refineWithClaude fails with the error claude reports', async () => {
