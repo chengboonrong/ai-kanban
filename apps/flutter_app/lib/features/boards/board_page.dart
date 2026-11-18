@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,22 +14,56 @@ class BoardNotifier extends AsyncNotifier<Board> {
   final String boardId;
 
   Api get _api => ref.read(apiProvider);
-  int _mutations = 0;
+  int _mutations = 0, _inFlight = 0;
+  Timer? _poll;
 
   @override
-  Future<Board> build() => ref.watch(apiProvider).board(boardId);
+  Future<Board> build() async {
+    _poll?.cancel(); // the notifier object outlives a rebuild
+    _poll = null;
+    ref.onDispose(() => _poll?.cancel());
+    final board = await ref.watch(apiProvider).board(boardId);
+    _watchRuns(board);
+    return board;
+  }
+
+  /// While a card is being refined, refresh every few seconds so its badge follows the worker.
+  void _watchRuns(Board board) {
+    final active = board.columns.any((c) => c.tasks.any((t) => t.refinement == 'queued' || t.refinement == 'running'));
+    if (!active || _poll != null) return;
+    _poll = Timer(const Duration(seconds: 5), () async {
+      _poll = null;
+      final before = _mutations;
+      try {
+        final board = await _api.board(boardId);
+        // Never overwrite an optimistic move or a newer refresh; the mutation's own refresh reschedules polling.
+        if (ref.mounted && _inFlight == 0 && before == _mutations) state = AsyncData(board);
+      } catch (_) {
+        // Offline for now; keep polling from what's on screen.
+      }
+      // Re-arm from whatever is on screen; a no-op when a mutation's refresh already did.
+      if (!ref.mounted) return;
+      if (state.value case final b?) _watchRuns(b);
+    });
+  }
 
   /// Runs [action], then replaces local state with the server's board (also undoing a failed optimistic move).
   Future<void> _mutate(Future<void> Function() action) async {
     final mutation = ++_mutations;
+    _inFlight++;
     try {
       await action();
     } finally {
       try {
         final board = await _api.board(boardId);
-        if (mutation == _mutations) state = AsyncData(board); // a later mutation (and its refresh) supersedes this one
+        if (mutation == _mutations) {
+          state = AsyncData(board); // a later mutation (and its refresh) supersedes this one
+          _watchRuns(board);
+        }
       } catch (_) {
         // No server and no saved copy: keep what's on screen; the action's own error is what the caller reports.
+      } finally {
+        _inFlight--;
       }
     }
   }
@@ -45,6 +81,7 @@ class BoardNotifier extends AsyncNotifier<Board> {
   }
 
   Future<void> reload() => _mutate(() async {});
+  Future<void> setRepository(String? repository) => _mutate(() => _api.setRepository(boardId, repository));
   Future<void> addColumn(String name) => _mutate(() => _api.addColumn(boardId, name));
   Future<void> renameColumn(String id, String name) => _mutate(() => _api.updateColumn(id, name: name));
   Future<void> deleteColumn(String id) => _mutate(() => _api.deleteColumn(id));
@@ -65,8 +102,32 @@ class BoardPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(board?.name ?? 'Board'),
+        title: ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(board?.name ?? 'Board', overflow: TextOverflow.ellipsis),
+          subtitle: board?.repository == null ? null : Text(board!.repository!, overflow: TextOverflow.ellipsis),
+        ),
         actions: [
+          if (board != null)
+            PopupMenuButton<String>(
+              tooltip: 'Repository',
+              icon: const Icon(Icons.link),
+              onSelected: (choice) async {
+                if (choice == 'disconnect') {
+                  if (await confirm(context, 'Disconnect ${board.repository}? New cards won\'t be refined.', action: 'Disconnect') &&
+                      context.mounted) {
+                    await runWithFeedback(context, () => notifier.setRepository(null));
+                  }
+                  return;
+                }
+                final repo = await promptText(context, 'GitHub repository (owner/name)', initial: board.repository ?? '', action: 'Connect');
+                if (repo != null && context.mounted) await runWithFeedback(context, () => notifier.setRepository(repo));
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(value: 'connect', child: Text(board.repository == null ? 'Connect repository…' : 'Change repository…')),
+                if (board.repository != null) const PopupMenuItem(value: 'disconnect', child: Text('Disconnect repository')),
+              ],
+            ),
           IconButton(
             tooltip: 'Add column',
             icon: const Icon(Icons.view_column_outlined),
@@ -216,9 +277,24 @@ class _TaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final status = switch (task.refinement) {
+      'queued' => (Icons.hourglass_empty, 'Waiting for a worker'),
+      'running' => (Icons.auto_awesome, 'Refining…'),
+      'ready' => (Icons.rate_review_outlined, 'Spec ready for review'),
+      'approved' => (Icons.verified_outlined, 'Spec approved'),
+      'failed' => (Icons.error_outline, 'Refinement failed'),
+      _ => null,
+    };
     final card = Card(
       child: ListTile(
         title: Text(task.title),
+        subtitle: status == null
+            ? null
+            : Row(children: [
+                Icon(status.$1, size: 14),
+                const SizedBox(width: 4),
+                Flexible(child: Text(status.$2, overflow: TextOverflow.ellipsis)),
+              ]),
         onTap: () => context.go('/boards/$boardId/tasks/${task.id}'),
       ),
     );

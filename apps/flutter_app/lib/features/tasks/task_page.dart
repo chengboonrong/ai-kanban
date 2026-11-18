@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../core/widgets.dart';
+import '../agents/refinement.dart';
 import '../boards/board_page.dart';
 
 final taskProvider = FutureProvider.autoDispose.family<TaskDetail, String>((ref, id) => ref.watch(apiProvider).task(id));
@@ -21,7 +22,7 @@ class TaskPage extends ConsumerWidget {
       appBar: AppBar(title: const Text('Task')),
       body: switch (detail) {
         AsyncValue(:final value?) when board != null =>
-          _TaskEditor(key: ValueKey(taskId), boardId: boardId, detail: value, columns: board.columns),
+          _TaskEditor(key: ValueKey(taskId), boardId: boardId, detail: value, columns: board.columns, repository: board.repository),
         AsyncValue(:final error?) => Center(child: Text(errorMessage(error))),
         _ => const Center(child: CircularProgressIndicator()),
       },
@@ -30,8 +31,9 @@ class TaskPage extends ConsumerWidget {
 }
 
 class _TaskEditor extends ConsumerStatefulWidget {
-  const _TaskEditor({super.key, required this.boardId, required this.detail, required this.columns});
+  const _TaskEditor({super.key, required this.boardId, required this.detail, required this.columns, this.repository});
   final String boardId;
+  final String? repository;
   final TaskDetail detail;
   final List<BoardColumn> columns;
 
@@ -104,6 +106,8 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
         const Spacer(),
         TextButton.icon(onPressed: _delete, icon: const Icon(Icons.delete_outline), label: const Text('Delete')),
       ]),
+      const SizedBox(height: 24),
+      RefinementPanel(boardId: widget.boardId, taskId: task.id, repository: widget.repository),
     ]);
     final activity = _ActivityList(activity: widget.detail.activity);
 
@@ -126,6 +130,10 @@ class _ActivityList extends StatelessWidget {
 
   static String describe(Activity a) => switch (a.kind) {
         'created' => 'created this in ${a.data['column']}',
+        'refinement_requested' => 'asked the AI to refine this',
+        'spec_ready' => 'received AI spec v${a.data['version']}',
+        'spec_approved' => 'approved spec v${a.data['version']}',
+        'refinement_failed' => 'saw a refinement fail: ${a.data['error']}',
         'moved' => 'moved it from ${a.data['from']} to ${a.data['to']}',
         'updated' => [
             if (a.data['title'] case {'from': final from, 'to': final to}) 'renamed "$from" to "$to"',

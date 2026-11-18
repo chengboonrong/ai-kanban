@@ -74,6 +74,8 @@ class Api {
     return Board.fromJson(data, offline: offline);
   }
 
+  Future<void> setRepository(String boardId, String? repository) => _dio.patch('/boards/$boardId', data: {'repository': repository});
+
   Future<void> addColumn(String boardId, String name) => _dio.post('/boards/$boardId/columns', data: {'name': name});
   Future<void> updateColumn(String id, {String? name, int? position}) =>
       _dio.patch('/columns/$id', data: {'name': ?name, 'position': ?position});
@@ -86,6 +88,19 @@ class Api {
   Future<void> updateTask(String id, {String? title, String? description, String? columnId, int? position}) =>
       _dio.patch('/tasks/$id', data: {'title': ?title, 'description': ?description, 'columnId': ?columnId, 'position': ?position});
   Future<void> deleteTask(String id) => _dio.delete('/tasks/$id');
+
+  Future<Refinement> refinement(String taskId) async => Refinement.fromJson((await _dio.get('/tasks/$taskId/refinement')).data);
+  Future<void> refine(String taskId) => _dio.post('/tasks/$taskId/runs');
+  Future<void> cancelRun(String runId) => _dio.post('/runs/$runId/cancel');
+  Future<void> approveSpec(String specId) => _dio.post('/specs/$specId/approve');
+
+  /// Long-poll: the server answers when there are events after [after], when the run ends, or after ~20s.
+  Future<({String state, List<RunEvent> events})> runEvents(String runId, int after) async {
+    final data = (await _dio.get('/runs/$runId/events',
+            queryParameters: {'after': after}, options: Options(receiveTimeout: const Duration(seconds: 45))))
+        .data;
+    return (state: data['state'] as String, events: [for (final e in data['events']) RunEvent.fromJson(e)]);
+  }
 }
 
 /// No response at all: the API is down or unreachable (on web this includes CORS failures).
