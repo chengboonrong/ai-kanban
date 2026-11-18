@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/agents/workers.dart';
 import '../features/auth/auth.dart';
 import '../features/auth/login_page.dart';
 import '../features/boards/board_page.dart';
@@ -27,6 +28,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/',
         builder: (_, _) => const HomePage(),
         routes: [
+          GoRoute(path: 'workers', builder: (_, _) => const WorkersPage()),
           GoRoute(
             path: 'boards/:boardId',
             builder: (_, s) => BoardPage(boardId: s.pathParameters['boardId']!),

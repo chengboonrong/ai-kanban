@@ -147,6 +147,21 @@ class Api {
   Future<void> approveSpec(String specId) =>
       _dio.post('/specs/$specId/approve');
 
+  Future<List<Worker>> workers() async => [
+    for (final w in (await _dio.get('/workers')).data) Worker.fromJson(w),
+  ];
+
+  /// A one-time code the worker's `connect` command trades for its token.
+  Future<({String code, DateTime expiresAt})> pairWorker() async {
+    final data = (await _dio.post('/workers/pairing')).data;
+    return (
+      code: data['code'] as String,
+      expiresAt: DateTime.parse(data['expiresAt']).toLocal(),
+    );
+  }
+
+  Future<void> deleteWorker(String id) => _dio.delete('/workers/$id');
+
   Future<TaskGitHubDetail> github(String taskId) async =>
       TaskGitHubDetail.fromJson((await _dio.get('/tasks/$taskId/github')).data);
 

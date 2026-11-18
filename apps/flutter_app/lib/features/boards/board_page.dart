@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../core/widgets.dart';
+import '../agents/refinement.dart';
 import '../github/github.dart';
 import '../tasks/outbox.dart';
 
@@ -431,7 +432,7 @@ class _ColumnView extends ConsumerWidget {
   }
 }
 
-class _TaskCard extends StatelessWidget {
+class _TaskCard extends ConsumerWidget {
   const _TaskCard({
     required this.boardId,
     required this.task,
@@ -442,9 +443,12 @@ class _TaskCard extends StatelessWidget {
   final double width;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final waiting = task.refinement == 'queued'
+        ? ref.watch(refinementProvider(task.id)).value?.waiting
+        : null;
     final status = switch (task.refinement) {
-      'queued' => (Icons.hourglass_empty, 'Waiting for a worker'),
+      'queued' => (Icons.hourglass_empty, waiting ?? 'Waiting for a worker'),
       'running' => (Icons.auto_awesome, 'Refining…'),
       'ready' => (Icons.rate_review_outlined, 'Spec ready for review'),
       'approved' => (Icons.verified_outlined, 'Spec approved'),
@@ -467,6 +471,7 @@ class _TaskCard extends StatelessWidget {
                         Flexible(
                           child: Text(
                             status.$2,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
