@@ -115,7 +115,7 @@ fvm flutter test integration_test/refinement_flow_test.dart -d macos   # refinem
 ```
 
 `apps/flutter_app/tool/acceptance.sh` runs both end-to-end flows in one go (macOS): it starts Postgres, reuses an API
-already on `:8080` or starts one for the run, then drives the app. It's local only; CI runs lint (`npm run lint` at the
+already on `:8080` (started with `npm run dev`) or starts one for the run, then drives the app. It's local only; CI runs lint (`npm run lint` at the
 repo root), `dart format`, the analyzer, and the unit and API tests.
 
 ### Refining tasks with a local worker
