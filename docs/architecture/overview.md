@@ -180,10 +180,10 @@ The desktop Flutter app registers and talks to the worker over loopback or authe
 
 ## 8. MVP roadmap
 
-1. **Foundation** — Flutter desktop/web/mobile shell, auth, PostgreSQL backend, workspace and board creation, GitHub App installation.
+1. **Foundation** — Flutter desktop/web/mobile shell, auth, PostgreSQL backend, workspace and board creation.
 2. **Kanban core** — create/edit tasks, configurable columns, activity history, local task caching, adaptive layouts.
-3. **OpenCode + DeepSeek** — worker registration, repo inspection, AI refinement, structured outputs, streaming run events, approval screen.
-4. **GitHub sync** — issue creation, idempotency, webhook ingestion, PR tracking, review and CI status.
+3. **OpenCode + DeepSeek** — worker registration, repo inspection of a local checkout, AI refinement, structured outputs, streaming run events, approval screen.
+4. **GitHub sync** — GitHub App installation, issue creation, idempotency, webhook ingestion, PR tracking, review and CI status.
 5. **Hybrid workers** — persistent local worker, remote container worker, leases, cancellation, retry rules, execution target selection.
 6. **Hardening & release** — permissions, read-only enforcement, failure recovery, reconciliation, package signing, tests, end-to-end validation.
 
