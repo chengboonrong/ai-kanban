@@ -36,6 +36,13 @@ export async function buildApp({ pool, authMode, logger = false }: AppOptions) {
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   });
 
+  // Don't leak internals (SQL errors, stack messages) in 5xx responses; client errors pass through.
+  app.setErrorHandler((err: { statusCode?: number }, req, reply) => {
+    if ((err.statusCode ?? 500) < 500) return reply.send(err);
+    req.log.error(err);
+    return reply.code(500).send({ statusCode: 500, error: 'Internal Server Error', message: 'Internal server error' });
+  });
+
   app.decorateRequest('userId', '');
   app.addHook('onRequest', async (req) => {
     if (req.routeOptions.config.public) return;

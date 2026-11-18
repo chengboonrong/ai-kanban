@@ -38,8 +38,17 @@ async function boardFor(db: Db, userId: string, kind: 'board' | 'column' | 'task
   return rows[0].id;
 }
 
-/** Serialises every ordering change on one board. */
-const lockBoard = (c: pg.PoolClient, boardId: string) => c.query('SELECT 1 FROM boards WHERE id = $1 FOR UPDATE', [boardId]);
+/** Serialises every ordering change on one board. Access was checked before the transaction, so re-check existence here. */
+async function lockBoard(c: pg.PoolClient, boardId: string) {
+  if (!(await c.query('SELECT 1 FROM boards WHERE id = $1 FOR UPDATE', [boardId])).rowCount) throw httpError(404, 'board not found');
+}
+
+/** Re-reads a row under the board lock: a concurrent request may have deleted it after the access check. */
+async function lockedRow(c: pg.PoolClient, kind: 'column' | 'task', sql: string, id: string) {
+  const { rows } = await c.query(sql, [id]);
+  if (!rows[0]) throw httpError(404, `${kind} not found`);
+  return rows[0];
+}
 
 // ponytail: dense integer positions renumbered under the board lock; fine for human-sized boards,
 // switch to fractional ranks if boards reach thousands of cards.
@@ -175,9 +184,9 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
       const boardId = await boardFor(pool, req.userId, 'column', id);
       return tx(pool, async (c) => {
         await lockBoard(c, boardId);
+        const col = await lockedRow(c, 'column', 'SELECT position FROM columns WHERE id = $1', id);
         if (name !== undefined) await c.query('UPDATE columns SET name = $2 WHERE id = $1', [id, name]);
         if (position !== undefined) {
-          const { rows: [col] } = await c.query('SELECT position FROM columns WHERE id = $1', [id]);
           await move(c, 'columns', 'board_id', { id, scope: boardId, position: col.position }, boardId, position);
         }
         return (await c.query(`SELECT ${COLUMN} FROM columns WHERE id = $1`, [id])).rows[0];
@@ -190,6 +199,7 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
     const boardId = await boardFor(pool, req.userId, 'column', id);
     await tx(pool, async (c) => {
       await lockBoard(c, boardId);
+      await lockedRow(c, 'column', 'SELECT 1 FROM columns WHERE id = $1', id);
       if ((await c.query('SELECT 1 FROM tasks WHERE column_id = $1 LIMIT 1', [id])).rows[0]) {
         throw httpError(409, 'column still has tasks; move or delete them first');
       }
@@ -239,6 +249,7 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
     const { id } = req.params as Id;
     await boardFor(pool, req.userId, 'task', id);
     const { rows: [task] } = await pool.query(`SELECT ${TASK} FROM tasks WHERE id = $1`, [id]);
+    if (!task) throw httpError(404, 'task not found');
     const { rows: activity } = await pool.query(
       `SELECT a.id, a.kind, a.data, a.created_at AS "createdAt", u.display_name AS actor
        FROM task_activity a JOIN users u ON u.id = a.actor_id WHERE a.task_id = $1 ORDER BY a.id`,
@@ -266,7 +277,7 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
       const boardId = await boardFor(pool, req.userId, 'task', id);
       return tx(pool, async (c) => {
         await lockBoard(c, boardId);
-        const { rows: [task] } = await c.query(`SELECT ${TASK} FROM tasks WHERE id = $1`, [id]);
+        const task = await lockedRow(c, 'task', `SELECT ${TASK} FROM tasks WHERE id = $1`, id);
 
         const changes: Record<string, unknown> = {};
         if (patch.title !== undefined && patch.title !== task.title) changes.title = { from: task.title, to: patch.title };
@@ -302,7 +313,7 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
     const boardId = await boardFor(pool, req.userId, 'task', id);
     await tx(pool, async (c) => {
       await lockBoard(c, boardId);
-      const { rows: [t] } = await c.query('DELETE FROM tasks WHERE id = $1 RETURNING column_id, position', [id]);
+      const t = await lockedRow(c, 'task', 'DELETE FROM tasks WHERE id = $1 RETURNING column_id, position', id);
       await c.query('UPDATE tasks SET position = position - 1 WHERE column_id = $1 AND position > $2', [t.column_id, t.position]);
     });
     return reply.code(204).send();

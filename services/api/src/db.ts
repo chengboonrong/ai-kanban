@@ -12,12 +12,12 @@ export async function tx<T>(pool: pg.Pool, fn: (c: pg.PoolClient) => Promise<T>)
     await c.query('BEGIN');
     const result = await fn(c);
     await c.query('COMMIT');
+    c.release();
     return result;
   } catch (err) {
-    await c.query('ROLLBACK');
+    // A failed ROLLBACK means a broken connection: destroy it instead of returning it to the pool.
+    await c.query('ROLLBACK').then(() => c.release(), (rollbackErr) => c.release(rollbackErr));
     throw err;
-  } finally {
-    c.release();
   }
 }
 

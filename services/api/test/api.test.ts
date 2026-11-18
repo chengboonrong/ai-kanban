@@ -167,3 +167,14 @@ test('validates input', async () => {
   });
   assert.equal(res.statusCode, 400);
 });
+
+test('racing deletes return 404 for the loser, never 500', async () => {
+  const { api, board } = await boardFixture();
+  const column = (await api('POST', `/boards/${board.id}/columns`, { name: 'Tmp' })).json();
+  const task = (await api('POST', `/boards/${board.id}/tasks`, { title: 't' })).json();
+  const columnDeletes = await Promise.all([1, 2, 3].map(() => api('DELETE', `/columns/${column.id}`)));
+  assert.deepEqual(columnDeletes.map((r) => r.statusCode).sort(), [204, 404, 404]);
+  const taskOps = await Promise.all([api('DELETE', `/tasks/${task.id}`), api('PATCH', `/tasks/${task.id}`, { title: 'x' }), api('DELETE', `/tasks/${task.id}`)]);
+  assert.ok(taskOps.every((r) => [200, 204, 404].includes(r.statusCode)), taskOps.map((r) => r.statusCode).join());
+  assert.equal(taskOps.filter((r) => r.statusCode === 204).length, 1);
+});
