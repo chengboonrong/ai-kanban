@@ -71,6 +71,7 @@ export async function exportCommit(dir: string, commitSha: string) {
   } catch (e) {
     await rm(folder, { recursive: true, force: true });
     const message = (e as Error).message.replaceAll(staging, '.').replaceAll(folder, '.');
+    // eslint-disable-next-line preserve-caught-error -- the cause carries the unscrubbed paths
     throw new Error(`could not export ${commitSha}: ${message}`.slice(0, 1000));
   } finally {
     await rm(staging, { recursive: true, force: true });
