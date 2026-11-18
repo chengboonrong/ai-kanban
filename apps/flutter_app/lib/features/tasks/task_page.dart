@@ -7,6 +7,7 @@ import '../../core/models.dart';
 import '../../core/widgets.dart';
 import '../agents/refinement.dart';
 import '../boards/board_page.dart';
+import '../github/github.dart';
 
 final taskProvider = FutureProvider.autoDispose.family<TaskDetail, String>(
   (ref, id) => ref.watch(apiProvider).task(id),
@@ -159,6 +160,7 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
           taskId: task.id,
           repository: widget.repository,
         ),
+        GitHubPanel(boardId: widget.boardId, taskId: task.id),
       ],
     );
     final activity = _ActivityList(activity: widget.detail.activity);
@@ -205,6 +207,8 @@ class _ActivityList extends StatelessWidget {
     'spec_ready' => 'received AI spec v${a.data['version']}',
     'spec_approved' => 'approved spec v${a.data['version']}',
     'refinement_failed' => 'saw a refinement fail: ${a.data['error']}',
+    'github_issue_created' =>
+      'saw GitHub issue${a.data['number'] == null ? '' : ' #${a.data['number']}'} created',
     'moved' => 'moved it from ${a.data['from']} to ${a.data['to']}',
     'updated' => [
       if (a.data['title'] case {'from': final from, 'to': final to})

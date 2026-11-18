@@ -5,6 +5,7 @@ import type pg from 'pg';
 import specSchema from '../../../packages/contracts/refined-spec.schema.json' with { type: 'json' };
 import { httpError, sha256, tx } from './db.ts';
 import { boardFor, enqueueRun, logActivity, REPOSITORY, RUN } from './routes.ts';
+import { queueIssue } from './sync.ts';
 
 const uuid = { type: 'string', format: 'uuid' } as const;
 const idParams = { type: 'object', required: ['id'], properties: { id: uuid } } as const;
@@ -115,16 +116,24 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
     const { id } = req.params as Id;
     const { rows: [found] } = await pool.query('SELECT task_id FROM specs WHERE id = $1', [id]);
     if (!found) throw httpError(404, 'spec not found');
-    await boardFor(pool, req.userId, 'task', found.task_id);
+    const boardId = await boardFor(pool, req.userId, 'task', found.task_id);
     return tx(pool, async (c) => {
+      // Board before task, the order a task delete takes them in; the share lock keeps the repository put until the issue is queued.
+      const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1 FOR SHARE', [boardId]);
       await c.query('SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE', [found.task_id]); // serialises with a new version landing
       const { rows: [spec] } = await c.query(`SELECT ${SPEC} FROM specs WHERE id = $1 FOR UPDATE`, [id]);
       if (!spec) throw httpError(404, 'spec not found');
       if (spec.approvedAt) return spec;
       const { rows: [latest] } = await c.query('SELECT max(version) AS v FROM specs WHERE task_id = $1', [spec.taskId]);
       if (latest.v !== spec.version) throw httpError(409, 'a newer version of this spec exists');
+      // The spec describes the repository it was refined against; the issue must not land anywhere else.
+      const { rows: [run] } = await c.query('SELECT repository FROM agent_runs WHERE id = $1', [spec.runId]);
+      if (board.repository !== run.repository) {
+        throw httpError(409, `the board now points at ${board.repository ?? 'no repository'}; refine again`);
+      }
       const { rows } = await c.query(`UPDATE specs SET approved_by = $2, approved_at = now() WHERE id = $1 RETURNING ${SPEC}`, [id, req.userId]);
       await logActivity(c, spec.taskId, req.userId, 'spec_approved', { version: spec.version });
+      await queueIssue(c, spec.taskId, run.repository);
       return rows[0];
     });
   });

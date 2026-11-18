@@ -147,6 +147,13 @@ class Api {
   Future<void> approveSpec(String specId) =>
       _dio.post('/specs/$specId/approve');
 
+  Future<TaskGitHubDetail> github(String taskId) async =>
+      TaskGitHubDetail.fromJson((await _dio.get('/tasks/$taskId/github')).data);
+
+  /// Re-queues a failed issue, or creates the missing one; 409 once the issue exists.
+  Future<void> retryGitHub(String taskId) =>
+      _dio.post('/tasks/$taskId/github/retry');
+
   /// Long-poll: the server answers when there are events after [after], when the run ends, or after ~20s.
   Future<({String state, List<RunEvent> events})> runEvents(
     String runId,

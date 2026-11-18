@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../core/widgets.dart';
+import '../github/github.dart';
 import '../tasks/outbox.dart';
 
 class BoardNotifier extends AsyncNotifier<Board> {
@@ -16,6 +17,7 @@ class BoardNotifier extends AsyncNotifier<Board> {
   Api get _api => ref.read(apiProvider);
   int _mutations = 0, _inFlight = 0;
   Timer? _poll;
+  Duration? _pollDelay;
 
   @override
   Future<Board> build() async {
@@ -27,15 +29,25 @@ class BoardNotifier extends AsyncNotifier<Board> {
     return board;
   }
 
-  /// While a card is being refined, refresh every few seconds so its badge follows the worker.
+  /// While a card is being refined, refresh every few seconds so its badge follows the worker;
+  /// while an issue is being created or is open, every 30 s so linked PRs, CI and reviews show up.
   void _watchRuns(Board board) {
-    final active = board.columns.any(
-      (c) => c.tasks.any(
-        (t) => t.refinement == 'queued' || t.refinement == 'running',
-      ),
-    );
-    if (!active || _poll != null) return;
-    _poll = Timer(const Duration(seconds: 5), () async {
+    final tasks = board.columns.expand((c) => c.tasks);
+    final Duration delay;
+    if (tasks.any(
+      (t) => t.refinement == 'queued' || t.refinement == 'running',
+    )) {
+      delay = const Duration(seconds: 5);
+    } else if (tasks.any((t) => t.github?.active ?? false)) {
+      delay = const Duration(seconds: 30);
+    } else {
+      return;
+    }
+    // A pending poll that is due as soon (or sooner) is enough; a slower one gives way to the faster one.
+    if (_poll != null && _pollDelay! <= delay) return;
+    _poll?.cancel();
+    _pollDelay = delay;
+    _poll = Timer(delay, () async {
       _poll = null;
       final before = _mutations;
       try {
@@ -442,15 +454,26 @@ class _TaskCard extends StatelessWidget {
     final card = Card(
       child: ListTile(
         title: Text(task.title),
-        subtitle: status == null
+        subtitle: status == null && task.github == null
             ? null
-            : Row(
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(status.$1, size: 14),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text(status.$2, overflow: TextOverflow.ellipsis),
-                  ),
+                  if (status != null)
+                    Row(
+                      children: [
+                        Icon(status.$1, size: 14),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            status.$2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (task.github case final github?)
+                    GitHubBadge(github: github),
                 ],
               ),
         onTap: () => context.go('/boards/$boardId/tasks/${task.id}'),

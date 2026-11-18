@@ -36,6 +36,7 @@ class Task {
     required this.title,
     required this.description,
     this.refinement,
+    this.github,
   });
   factory Task.fromJson(Map<String, dynamic> j) => Task(
     id: j['id'],
@@ -43,11 +44,15 @@ class Task {
     title: j['title'],
     description: j['description'],
     refinement: j['refinement'],
+    github: j['github'] == null ? null : TaskGitHub.fromJson(j['github']),
   );
   final String id, columnId, title, description;
 
   /// The card's AI state on the board: queued, running, ready, approved, failed, or null.
   final String? refinement;
+
+  /// The card's issue and PR summary; null when nothing is synced (or the API predates GitHub sync).
+  final TaskGitHub? github;
 
   Task copyWith({String? columnId}) => Task(
     id: id,
@@ -55,7 +60,90 @@ class Task {
     title: title,
     description: description,
     refinement: refinement,
+    github: github,
   );
+}
+
+class TaskGitHub {
+  TaskGitHub({
+    this.issueState,
+    this.issueNumber,
+    this.prs = 0,
+    this.review,
+    this.ci,
+  });
+  factory TaskGitHub.fromJson(Map<String, dynamic> j) => TaskGitHub(
+    issueState: j['issue']?['state'],
+    issueNumber: j['issue']?['number'],
+    prs: j['prs'] ?? 0,
+    review: j['review'],
+    ci: j['ci'],
+  );
+
+  /// open or closed once created, otherwise pending or failed; null when there's no issue.
+  final String? issueState;
+  final int? issueNumber;
+
+  /// Linked PRs.
+  final int prs;
+
+  /// Review of the most recently updated open PR: approved, changes_requested, review_required, none, or null.
+  final String? review;
+
+  /// Worst CI result across open PRs: success, failure, pending, none, or null.
+  final String? ci;
+
+  /// Still changing on GitHub's side, so the board keeps refreshing.
+  bool get active => issueState == 'pending' || issueState == 'open';
+}
+
+class GitHubIssue {
+  GitHubIssue.fromJson(Map<String, dynamic> j)
+    : state = j['state'],
+      number = j['number'],
+      url = j['url'],
+      issueState = j['issueState'],
+      error = j['error'];
+
+  /// pending, creating, failed, or created.
+  final String state;
+  final int? number;
+  final String? url, error;
+
+  /// open or closed, once created.
+  final String? issueState;
+}
+
+class PullRequest {
+  PullRequest.fromJson(Map<String, dynamic> j)
+    : repository = j['repository'],
+      number = j['number'],
+      title = j['title'],
+      url = j['url'],
+      author = j['author'],
+      state = j['state'],
+      draft = j['draft'] == true,
+      review = j['review'],
+      ci = j['ci'];
+  final String repository, title, url, state;
+  final int number;
+  final String? author, review, ci;
+  final bool draft;
+}
+
+/// GET /tasks/:id/github: the task's issue and the PRs linked to it.
+class TaskGitHubDetail {
+  TaskGitHubDetail.fromJson(Map<String, dynamic> j)
+    : issue = j['issue'] == null ? null : GitHubIssue.fromJson(j['issue']),
+      prs = [for (final p in j['prs'] ?? const []) PullRequest.fromJson(p)];
+  final GitHubIssue? issue;
+  final List<PullRequest> prs;
+
+  /// Still changing on GitHub's side, so the task page keeps refreshing.
+  bool get active =>
+      issue?.state == 'pending' ||
+      issue?.issueState == 'open' ||
+      prs.any((p) => p.state == 'open');
 }
 
 class BoardColumn {
