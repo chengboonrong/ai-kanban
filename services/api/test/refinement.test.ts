@@ -246,23 +246,26 @@ const sweepAll = async () => {
 };
 const claim = (worker: ReturnType<typeof as>, repository: string) => worker('POST', '/worker/claim', { repositories: [repository] });
 
-/** Starts `requests` while another connection holds `lock`, and lets go once `waiters` of them queue behind it, so they really overlap. */
-async function underLock<T>(lock: string, params: unknown[], waiters: number, requests: () => Promise<T>[]) {
+/** Starts `requests` in order while another connection holds `lock`, each once the one before queued, then lets go, so they really overlap. */
+async function underLock<T>(lock: string, params: unknown[], requests: (() => Promise<T>)[]) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
     await c.query(lock, params);
     const { rows: [{ pid }] } = await c.query('SELECT pg_backend_pid() AS pid');
-    const results = Promise.all(requests());
-    results.catch(() => {}); // awaited below; don't report it as unhandled meanwhile
+    const started: Promise<T>[] = [];
     let queued: number[] = [];
-    for (const deadline = Date.now() + 5_000; queued.length < waiters; await sleep(10)) {
-      assert.ok(Date.now() < deadline, `only ${queued.length} of ${waiters} requests queued behind the lock`);
-      // A second waiter queues behind the first one, not the holder, so follow the chain.
-      queued = (await pool.query('SELECT pid FROM pg_stat_activity WHERE pg_blocking_pids(pid) && $1::int[]', [[pid, ...queued]])).rows.map((r) => r.pid);
+    for (const request of requests) {
+      started.push(request());
+      started.at(-1)!.catch(() => {}); // awaited below; don't report it as unhandled meanwhile
+      for (const deadline = Date.now() + 5_000; queued.length < started.length; await sleep(10)) {
+        assert.ok(Date.now() < deadline, `only ${queued.length} of ${started.length} requests queued behind the lock`);
+        // A later waiter may queue behind an earlier one, not the holder, so follow the chain.
+        queued = (await pool.query('SELECT pid FROM pg_stat_activity WHERE pg_blocking_pids(pid) && $1::int[]', [[pid, ...queued]])).rows.map((r) => r.pid);
+      }
     }
     await c.query('ROLLBACK');
-    return await results;
+    return await Promise.all(started);
   } finally {
     await c.query('ROLLBACK').catch(() => {});
     c.release();
@@ -280,10 +283,11 @@ test('pairing: a code pairs one worker, once, within 10 minutes, typed loosely',
 
   const paired = await pair(` ${code.toLowerCase().replace('-', ' ')} `);
   assert.equal(paired.statusCode, 201);
-  const { id, name, token } = paired.json();
+  const { id, name, token, ownerId } = paired.json();
   assert.equal(name, 'My Mac');
   assert.match(token, /^wkr_/);
-  assert.deepEqual((await as(token)('GET', '/worker/me')).json(), { id, name: 'My Mac' });
+  assert.equal(ownerId, (await api('GET', '/me')).json().id); // `connect` keeps checkouts only for the same account
+  assert.deepEqual((await as(token)('GET', '/worker/me')).json(), { id, name: 'My Mac', ownerId });
   assert.deepEqual((await api('GET', '/workers')).json().map((w: { id: string }) => w.id), [id]);
 
   const reused = await pair(code);
@@ -342,10 +346,11 @@ test('a heartbeat renews the lease, up to 20 minutes from the start, after which
   const { api, board, repository, worker } = await fixture();
   const task = (await api('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' })).json();
   const run = (await claim(worker, repository)).json();
-  await lapse(run.id);
-  assert.equal((await worker('POST', `/worker/runs/${run.id}/events`, { events: [] })).statusCode, 204);
   const lease = async () =>
     (await pool.query(`SELECT extract(epoch FROM lease_until - now())::int AS left FROM agent_runs WHERE id = $1`, [run.id])).rows[0].left;
+  assert.ok((await lease()) > 80, 'a claim leases 90 s');
+  await lapse(run.id);
+  assert.equal((await worker('POST', `/worker/runs/${run.id}/events`, { events: [] })).statusCode, 204);
   assert.ok((await lease()) > 80);
   await sweepAll();
   assert.equal((await runRow(run.id)).state, 'running');
@@ -394,19 +399,34 @@ test('a released run is retried; only the worker running it can release it', asy
 
 test('a release racing a task delete neither deadlocks nor fails', async () => {
   const { api, board, repository, worker } = await fixture();
-  // A wrong lock order deadlocks only when the delete gets the board first, so race a few times.
-  for (let i = 0; i < 4; i++) {
+  // A wrong lock order deadlocks only when the delete gets the board first, so try both orders.
+  for (let i = 0; i < 2; i++) {
     const task = (await api('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' })).json();
     const run = (await claim(worker, repository)).json();
-    const [release, remove] = await underLock('SELECT 1 FROM boards WHERE id = $1 FOR UPDATE', [board.id], 2, () => [
-      worker('POST', `/worker/runs/${run.id}/release`),
-      api('DELETE', `/tasks/${task.id}`),
-    ]);
+    const requests = [() => worker('POST', `/worker/runs/${run.id}/release`), () => api('DELETE', `/tasks/${task.id}`)];
+    const results = await underLock('SELECT 1 FROM boards WHERE id = $1 FOR UPDATE', [board.id], i ? requests : requests.toReversed());
+    const [release, remove] = i ? results : results.toReversed();
     assert.ok([204, 409].includes(release.statusCode), `release ${release.statusCode}`); // 409 when the delete went first
     assert.equal(remove.statusCode, 204);
     assert.equal((await pool.query('SELECT 1 FROM agent_runs WHERE task_id = $1', [task.id])).rowCount, 0);
   }
 });
+
+for (const target of ['board', 'workspace']) {
+  test(`a release racing a ${target} delete neither deadlocks nor fails`, async () => {
+    const { api, board, repository, worker } = await fixture();
+    const task = (await api('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' })).json();
+    const run = (await claim(worker, repository)).json();
+    // The delete queues on the task first, then the release takes the board and queues on the task too. Had the
+    // delete not locked the board before its tasks, it would now wait for the release's board lock: a deadlock.
+    const [remove, release] = await underLock('SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE', [task.id], [
+      () => api('DELETE', target === 'board' ? `/boards/${board.id}` : `/workspaces/${board.workspaceId}`),
+      () => worker('POST', `/worker/runs/${run.id}/release`),
+    ]);
+    assert.equal(remove.statusCode, 204);
+    assert.equal(release.statusCode, 409); // the run went with the board
+  });
+}
 
 test('two sweeps of the same lapsed run queue one retry', async () => {
   const { api, board, repository, worker } = await fixture();
@@ -414,7 +434,7 @@ test('two sweeps of the same lapsed run queue one retry', async () => {
   const run = (await claim(worker, repository)).json();
   await sweepAll();
   await lapse(run.id);
-  await underLock('SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE', [task.id], 2, () => [sweepRuns(pool, app.log), sweepRuns(pool, app.log)]);
+  await underLock('SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE', [task.id], [() => sweepRuns(pool, app.log), () => sweepRuns(pool, app.log)]);
   assert.equal((await pool.query(`SELECT 1 FROM agent_runs WHERE task_id = $1 AND state = 'queued' AND attempt = 2`, [task.id])).rowCount, 1);
   const kinds = (await api('GET', `/tasks/${task.id}`)).json().activity.map((a: { kind: string }) => a.kind);
   assert.equal(kinds.filter((k: string) => k === 'refinement_retried').length, 1);

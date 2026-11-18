@@ -354,7 +354,7 @@ test('githubCheckouts keeps the git checkouts whose remote is on GitHub', () => 
   assert.deepEqual(githubCheckouts({}), []);
 });
 
-type Route = (body: Record<string, unknown>) => [number, object?];
+type Route = (body: Record<string, unknown>) => [number, object?] | Promise<[number, object?]>;
 async function fakeApi(routes: Record<string, Route>) {
   const requests: { route: string; body: Record<string, unknown> }[] = [];
   const server = createServer(async (req, res) => {
@@ -363,28 +363,41 @@ async function fakeApi(routes: Record<string, Route>) {
     const route = `${req.method} ${req.url}`;
     const body = raw ? JSON.parse(raw) : {};
     requests.push({ route, body });
-    const [status, out] = routes[route]?.(body) ?? [404, { message: 'not found' }];
+    const [status, out] = (await routes[route]?.(body)) ?? [404, { message: 'not found' }];
     res.writeHead(status, out ? { 'content-type': 'application/json' } : {}).end(out ? JSON.stringify(out) : undefined);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests, close: () => server.close() };
 }
 
-test('connect pairs with a code and keeps the checkouts only for the same API', async () => {
+test('connect pairs with a code and keeps the checkouts only for the same API and account', async () => {
   const api = await fakeApi({
-    'POST /workers/pair': (b) => (b.code === 'BAD' ? [400, { message: 'invalid or expired code' }] : [201, { id: 'w1', name: b.name, token: 'wkr_new' }]),
+    'POST /workers/pair': (b) =>
+      b.code === 'BAD' ? [400, { message: 'invalid or expired code' }] : [201, { id: 'w1', name: b.name, ownerId: b.code === 'THEIRS' ? 'u2' : 'u1', token: 'wkr_new' }],
   });
   const config = path.join(tmp(), 'worker.json');
   const cli = (...args: string[]) => promisify(execFile)(process.execPath, [CLI, ...args], { env: { ...process.env, AI_KANBAN_WORKER_CONFIG: config } });
   const read = () => JSON.parse(readFileSync(config, 'utf8'));
+  const cleared = /Cleared the allowed repositories: the account or API changed/;
+  const previous = { apiUrl: api.url, token: 'wkr_old', name: 'old', ownerId: 'u1', repositories: { 'acme/web': '/x' }, models: ['m'], refiner: 'claude' };
   try {
-    writeFileSync(config, JSON.stringify({ apiUrl: api.url, token: 'wkr_old', name: 'old', repositories: { 'acme/web': '/x' }, models: ['m'], refiner: 'claude' }));
-    await cli('connect', 'abcde-fghjk', '--name', 'My Mac');
+    writeFileSync(config, JSON.stringify(previous));
+    const { stdout } = await cli('connect', 'abcde-fghjk', '--name', 'My Mac');
     assert.deepEqual(api.requests.at(-1), { route: 'POST /workers/pair', body: { code: 'abcde-fghjk', name: 'My Mac' } });
-    assert.deepEqual(read(), { apiUrl: api.url, token: 'wkr_new', name: 'My Mac', repositories: { 'acme/web': '/x' }, models: ['m'], refiner: 'claude' });
+    assert.deepEqual(read(), { ...previous, token: 'wkr_new', name: 'My Mac' });
+    assert.doesNotMatch(stdout, cleared);
     assert.equal(statSync(config).mode & 0o777, 0o600);
 
-    writeFileSync(config, JSON.stringify({ ...read(), apiUrl: 'http://elsewhere.example' }));
+    writeFileSync(config, JSON.stringify(previous));
+    assert.match((await cli('connect', 'THEIRS')).stdout, cleared);
+    assert.deepEqual([read().repositories, read().ownerId], [{}, 'u2'], "someone else's code starts with no checkouts");
+
+    const { ownerId, ...unowned } = previous;
+    writeFileSync(config, JSON.stringify(unowned));
+    assert.match((await cli('connect', 'CODE')).stdout, cleared);
+    assert.deepEqual([read().repositories, read().ownerId], [{}, ownerId], 'a config from before owners were recorded starts with no checkouts');
+
+    writeFileSync(config, JSON.stringify({ ...previous, apiUrl: 'http://elsewhere.example' }));
     await cli('connect', 'CODE', '--api', api.url, '--name', 'My Mac');
     assert.deepEqual(read().repositories, {}, 'a different API starts with no checkouts');
     assert.equal(read().apiUrl, api.url);
@@ -421,6 +434,97 @@ test('SIGTERM during a job releases the run, stops the agent and exits 0', async
     assert.ok(routes.includes(`POST /worker/runs/${RUN}/release`));
     assert.ok(!routes.some((r) => r.endsWith('/fail') || r.endsWith('/complete')));
     assert.equal(alive(JSON.parse(readFileSync(log, 'utf8')).pid), false);
+  } finally {
+    child.kill('SIGKILL');
+    api.close();
+  }
+});
+
+const RUN = '00000000-0000-0000-0000-0000000000aa';
+const me: Route = () => [200, { id: 'w1', name: 'My Mac', ownerId: 'u1' }];
+/** A config and `start` against `api`, with the fake claude in `mode` (its log tells when it started). */
+function worker(api: { url: string }, mode: string, overrides: object = {}) {
+  const dir = tmp();
+  const config = path.join(dir, 'worker.json');
+  const log = path.join(dir, 'claude.json');
+  writeFileSync(config, JSON.stringify({ apiUrl: api.url, token: 'wkr_t', name: 'My Mac', repositories: { 'acme/web': repo() }, refiner: 'claude', ...overrides }));
+  const env = { ...process.env, AI_KANBAN_WORKER_CONFIG: config, FAKE_CLAUDE: mode, FAKE_CLAUDE_LOG: log };
+  const start = () => spawn(process.execPath, [CLI, 'start'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
+  return { config, log, lock: path.join(dir, 'worker.lock'), start };
+}
+const until = async (what: string, ok: () => boolean, ms = 15_000) => {
+  for (const t0 = Date.now(); !ok(); await sleep(50)) assert.ok(Date.now() - t0 < ms, what);
+};
+
+test('a second start on the same config waits for the first instead of claiming; a stale lock is taken over', async () => {
+  let claims = 0;
+  const api = await fakeApi({
+    'GET /worker/me': me,
+    'POST /worker/claim': () => (claims++ ? [204] : [200, { ...job, id: RUN }]),
+    [`POST /worker/runs/${RUN}/events`]: () => [204],
+    [`POST /worker/runs/${RUN}/release`]: () => [204],
+  });
+  const w = worker(api, 'hang');
+  const gone = spawn(process.execPath, ['-e', '']);
+  await once(gone, 'exit');
+  writeFileSync(w.lock, String(gone.pid)); // left by a worker that was killed
+  const first = w.start();
+  let second: ReturnType<typeof w.start> | undefined;
+  try {
+    await until('the first worker took the stale lock and started the agent', () => existsSync(w.log));
+    assert.equal(readFileSync(w.lock, 'utf8'), String(first.pid));
+    second = w.start();
+    let out = '';
+    second.stdout!.on('data', (d) => (out += d));
+    await until('the second worker says it waits', () => out.includes(`Another worker process (pid ${first.pid}) is using ${w.config}; waiting`));
+    await sleep(1000);
+    assert.equal(claims, 1, 'only the first worker claimed');
+    second.kill('SIGKILL');
+    first.kill('SIGTERM');
+    assert.deepEqual(await once(first, 'exit'), [0, null]);
+    assert.equal(existsSync(w.lock), false, 'the lock goes with the worker');
+  } finally {
+    first.kill('SIGKILL');
+    second?.kill('SIGKILL');
+    api.close();
+  }
+});
+
+test('SIGTERM while a claim is in flight hands the claimed run back without starting it', async () => {
+  const api = await fakeApi({
+    'GET /worker/me': me,
+    'POST /worker/claim': async () => (await sleep(1500), [200, { ...job, id: RUN }]),
+    [`POST /worker/runs/${RUN}/release`]: () => [204],
+  });
+  const w = worker(api, 'hang', { refiner: undefined }); // OpenCode, and no models: the built-in ones are used
+  const child = w.start();
+  try {
+    await until('the worker claimed', () => api.requests.some((r) => r.route === 'POST /worker/claim'));
+    child.kill('SIGTERM');
+    assert.deepEqual(await once(child, 'exit'), [0, null]);
+    assert.deepEqual(api.requests.map((r) => r.route).slice(-2), ['POST /worker/claim', `POST /worker/runs/${RUN}/release`]);
+  } finally {
+    child.kill('SIGKILL');
+    api.close();
+  }
+});
+
+test('a spec the API failed to take (503) is handed in again, not failed', async () => {
+  let claims = 0;
+  let completes = 0;
+  const api = await fakeApi({
+    'GET /worker/me': me,
+    'POST /worker/claim': () => (claims++ ? [204] : [200, { ...job, id: RUN }]),
+    [`POST /worker/runs/${RUN}/events`]: () => [204],
+    [`POST /worker/runs/${RUN}/complete`]: () => (completes++ ? [200, { version: 1 }] : [503, { message: 'unavailable' }]),
+    [`POST /worker/runs/${RUN}/fail`]: () => [204],
+  });
+  const child = worker(api, 'success').start();
+  try {
+    await until('the spec was handed in twice', () => completes === 2);
+    await sleep(200);
+    assert.equal(completes, 2);
+    assert.ok(!api.requests.some((r) => r.route.endsWith('/fail')));
   } finally {
     child.kill('SIGKILL');
     api.close();

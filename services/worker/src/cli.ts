@@ -5,7 +5,8 @@
 //   node src/cli.ts allow <owner/name> <path-to-checkout>      # or name one by hand
 //   node src/cli.ts start                                      # or: service install | uninstall | status (macOS)
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -24,13 +25,18 @@ type Config = {
   apiUrl: string;
   token: string;
   name: string;
+  ownerId?: string; // the account the token belongs to
   repositories: Record<string, string>;
   models: string[];
   refiner?: 'opencode' | 'claude';
   claudeModel?: string;
 };
 
-const load = async (): Promise<Config> => JSON.parse(await readFile(CONFIG, 'utf8'));
+const load = async (): Promise<Config> => {
+  const config = JSON.parse(await readFile(CONFIG, 'utf8'));
+  config.models ??= DEFAULT_MODELS; // a hand-edited config may leave it out
+  return config;
+};
 async function save(config: Config) {
   await mkdir(path.dirname(CONFIG), { recursive: true });
   await writeFile(CONFIG, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 }); // holds the worker token
@@ -61,18 +67,21 @@ async function connect(args: string[]) {
   });
   const body = await res.json().catch(() => undefined);
   if (res.status !== 201) throw new Error(`pairing failed (${res.status}): ${body?.message ?? JSON.stringify(body)}`);
-  // Checkouts carry over only to the same API: a phished `--api` must not inherit what this machine may read.
-  const same = previous?.apiUrl === apiUrl;
+  // Checkouts carry over only to the same API and account: a phished `--api`, or someone else's code, must not
+  // inherit what this machine may read.
+  const same = previous?.apiUrl === apiUrl && !!previous.ownerId && previous.ownerId === body.ownerId;
   await save({
     ...previous,
     apiUrl,
     token: body.token,
     name: body.name,
+    ownerId: body.ownerId,
     repositories: same ? previous.repositories : {},
     models: previous?.models ?? DEFAULT_MODELS,
     refiner: previous?.refiner ?? 'opencode',
   });
   console.log(`Connected worker "${body.name}" to ${apiUrl}. Config: ${CONFIG}`);
+  if (!same && Object.keys(previous?.repositories ?? {}).length) console.log('Cleared the allowed repositories: the account or API changed');
   if (!same || !Object.keys(previous.repositories).length) console.log('Next: checkouts (or allow <owner/name> <path>), then start');
 }
 
@@ -119,12 +128,59 @@ const opencodeClient = async () => {
   return (await opencode.catch((e) => ((opencode = undefined), Promise.reject(e)))).client;
 };
 
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM'; // someone else's process
+  }
+};
+
+/**
+ * One `start` per config: a claim fails any run still running on this worker, so two processes sharing a token would
+ * fail each other's runs. Waits for the other one rather than exiting, so launchd doesn't crash-loop.
+ */
+async function lockConfig() {
+  // ponytail: two processes taking over the same stale lock at the same instant can both win; use flock if that happens.
+  const lock = path.join(path.dirname(CONFIG), `${path.basename(CONFIG, '.json')}.lock`);
+  await mkdir(path.dirname(lock), { recursive: true });
+  for (let waiting = false; ; ) {
+    try {
+      await writeFile(lock, String(process.pid), { flag: 'wx' });
+      process.once('exit', () => rmSync(lock, { force: true }));
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    }
+    const pid = Number(await readFile(lock, 'utf8').catch(() => ''));
+    // A lock from before the last boot is stale even if its pid now names another process.
+    const sinceBoot = ((await stat(lock).catch(() => undefined))?.mtimeMs ?? 0) > Date.now() - os.uptime() * 1000;
+    if (pid && sinceBoot && alive(pid)) {
+      if (!waiting) console.log(`Another worker process (pid ${pid}) is using ${CONFIG}; waiting`);
+      waiting = true;
+      await sleep(10_000);
+    } else {
+      await rm(lock, { force: true });
+    }
+  }
+}
+
 // Never exits on its own: a missing config, no repositories or a rejected token are waited out (the file is re-read
 // every turn), so `allow`, `checkouts` and `connect` take effect without a restart and launchd never crash-loops.
 async function start() {
   let config: Config | undefined;
   let current: { id: string; ac: AbortController; done: Promise<void> } | undefined;
+  let claiming: ReturnType<typeof call> | undefined;
+  let stopping = false;
   const stop = async () => {
+    stopping = true;
+    if (claiming) {
+      // A run claimed as we stop would stay leased to nobody: wait for the answer and hand it back. At most 10 s, well
+      // inside launchd's 20 s before SIGKILL; a claim answered later is retried at this worker's next claim.
+      const claimed = await Promise.race([claiming, sleep(10_000)]);
+      if (claimed?.status === 200) await call(config!, 'POST', `/worker/runs/${claimed.body.id}/release`, undefined, 5000).catch(() => {});
+    }
     if (current) {
       current.ac.abort(STOPPED);
       // Hand the run back so it's retried now, not when its lease runs out; no final event flush.
@@ -137,6 +193,7 @@ async function start() {
     process.exit(0);
   };
   process.once('SIGINT', stop).once('SIGTERM', stop);
+  await lockConfig();
 
   let said = '';
   const say = (message: string) => message !== said && console.log((said = message));
@@ -166,7 +223,11 @@ async function start() {
     say(`Worker "${config.name}" polling ${config.apiUrl} for ${repositories.join(', ')} with ${refiner}`);
 
     const harness = config.refiner === 'claude' ? 'claude-code' : 'opencode';
-    const claim = await call(config, 'POST', '/worker/claim', { repositories, harness }).catch((e: Error) => ({ status: 0, body: e.message }));
+    if (stopping) return new Promise<never>(() => {}); // a job just ended because we're stopping: claim nothing more
+    claiming = call(config, 'POST', '/worker/claim', { repositories, harness }).catch((e: Error) => ({ status: 0, body: e.message }));
+    const claim = await claiming;
+    claiming = undefined;
+    if (stopping) return new Promise<never>(() => {}); // stop() hands the claimed run back and exits
     if (claim.status === 200) {
       const ac = new AbortController();
       current = { id: claim.body.id, ac, done: runJob(config, claim.body, ac) };
@@ -255,9 +316,16 @@ async function runJob(config: Config, job: Job, ac: AbortController) {
     const spec = JSON.parse(await clean(JSON.stringify(result.spec))); // models copy absolute paths into prose
     clearInterval(ticker);
     await flush().catch(() => {}); // progress lines are nice to have; the spec isn't
-    const res = await call(config, 'POST', `/worker/runs/${job.id}/complete`, { ...result, spec, commitSha });
+    let res: Awaited<ReturnType<typeof call>>;
+    for (let attempt = 1; ; attempt++) {
+      res = await call(config, 'POST', `/worker/runs/${job.id}/complete`, { ...result, spec, commitSha }).catch((e: Error) => ({ status: 0, body: e.message }));
+      if ((res.status && res.status < 500) || attempt === 3) break;
+      await sleep(attempt * 1000);
+    }
     if (res.status === 200) return console.log(`Spec v${res.body.version} ready for "${job.task.title}"`);
     if (res.status === 409) return console.log('Run was cancelled; result discarded');
+    // Failing the run would be final; left running, it's retried at this worker's next claim or when its lease lapses.
+    if (!res.status || res.status >= 500) return console.error(`Could not hand in the spec (${res.status || res.body}); the run will be retried`);
     throw new Error(`the API rejected the spec (${res.status}): ${JSON.stringify(res.body).slice(0, 1000)}`);
   } catch (e) {
     if (ac.signal.reason === STOPPED) return; // the worker is stopping: it releases the run instead

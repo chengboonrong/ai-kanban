@@ -65,7 +65,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
           [sha256(normaliseCode(code))],
         );
         if (!pairing) throw httpError(400, 'invalid or expired code');
-        const { rows } = await c.query(`INSERT INTO workers (owner_id, name, token_hash) VALUES ($1, $2, $3) RETURNING ${WORKER}`, [
+        const { rows } = await c.query(`INSERT INTO workers (owner_id, name, token_hash) VALUES ($1, $2, $3) RETURNING ${WORKER}, owner_id AS "ownerId"`, [
           pairing.owner_id,
           name,
           sha256(token),
@@ -201,7 +201,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
   // ---- Worker protocol (worker token) ----
   const worker = { worker: true };
 
-  app.get('/worker/me', { config: worker }, async (req) => (await pool.query('SELECT id, name FROM workers WHERE id = $1', [req.workerId])).rows[0]);
+  app.get('/worker/me', { config: worker }, async (req) => (await pool.query('SELECT id, name, owner_id AS "ownerId" FROM workers WHERE id = $1', [req.workerId])).rows[0]);
 
   app.post(
     '/worker/claim',
@@ -231,7 +231,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       // The repository check also drops a run queued just as the board was pointed elsewhere.
       // ponytail: per-person workers; shared team workers need workspace opt-in plus GitHub access checks (Milestones 4-5).
       const { rows: [run] } = await pool.query(
-        `UPDATE agent_runs SET state = 'running', worker_id = $1, started_at = now(), lease_until = ${LEASE}, harness = $4
+        `UPDATE agent_runs SET state = 'running', worker_id = $1, started_at = now(), lease_until = now() + interval '90 seconds', harness = $4
          WHERE id = (
            SELECT r.id FROM agent_runs r
            JOIN tasks t ON t.id = r.task_id
@@ -399,7 +399,7 @@ async function waitingFor(db: pg.Pool, taskId: string, repository: string) {
 
 /**
  * The one place the system fails a running run: lease lapsed (sweeper), worker stopped (release) or restarted (claim).
- * Locks board (share) → task → run, the order a task delete and approve take them in. False if it wasn't running (or
+ * Locks board (share) → task → run, the order deletes and approve take them in. False if it wasn't running (or
  * wasn't this worker's, or its lease was renewed meanwhile).
  */
 export async function expireRun(pool: pg.Pool, runId: string, reason: string, opts: { retry: boolean; workerId?: string; lapsed?: boolean }) {
@@ -452,7 +452,7 @@ export async function sweepRuns(pool: pg.Pool, log: FastifyBaseLogger) {
       if (capped) await expireRun(pool, id, 'timed out after 20 minutes', { retry: false, lapsed: true });
       else await expireRun(pool, id, 'the worker stopped responding', { retry: true, lapsed: true });
     } catch (err) {
-      log.error(err, `expiring run ${id} failed`); // e.g. a deadlock with a workspace delete; the next pass tries again
+      log.error(err, `expiring run ${id} failed`); // the next pass tries again
     }
   }
   return rows.length;

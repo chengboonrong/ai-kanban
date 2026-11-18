@@ -181,7 +181,8 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
     const { id } = req.params as Id;
     if ((await workspaceRole(pool, req.userId, id)) !== 'owner') throw httpError(403, 'only owners can delete a workspace');
     await tx(pool, async (c) => {
-      // Tasks locked in id order first, as the GitHub sync locks them, so the cascade can't deadlock with it.
+      // Boards before tasks, as expiring a run takes them; tasks in id order, as the GitHub sync locks them. Otherwise the cascade deadlocks with either.
+      await c.query('SELECT 1 FROM boards WHERE workspace_id = $1 ORDER BY id FOR UPDATE', [id]);
       await c.query('SELECT 1 FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.workspace_id = $1 ORDER BY t.id FOR UPDATE OF t', [id]);
       await c.query('DELETE FROM workspaces WHERE id = $1', [id]);
     });
@@ -241,7 +242,8 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
   app.delete('/boards/:id', { schema: { params: idParams } }, async (req, reply) => {
     const id = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
     await tx(pool, async (c) => {
-      await c.query('SELECT 1 FROM tasks WHERE board_id = $1 ORDER BY id FOR UPDATE', [id]); // as for workspaces above
+      await c.query('SELECT 1 FROM boards WHERE id = $1 FOR UPDATE', [id]); // as for workspaces above
+      await c.query('SELECT 1 FROM tasks WHERE board_id = $1 ORDER BY id FOR UPDATE', [id]);
       await c.query('DELETE FROM boards WHERE id = $1', [id]);
     });
     return reply.code(204).send();
