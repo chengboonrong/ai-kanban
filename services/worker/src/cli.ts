@@ -1,8 +1,9 @@
-// AI Kanban local worker: reads checkouts on this machine and turns task briefs into specs with OpenCode.
+// AI Kanban local worker: reads checkouts on this machine and turns task briefs into specs with OpenCode, or with
+// Claude Code in a terminal of the local Orca app.
 //
 //   node src/cli.ts register --login <name> [--name "My Mac"] [--api http://localhost:8080]
 //   node src/cli.ts allow <owner/name> <path-to-checkout>     # the repositories this worker may read
-//   node src/cli.ts start
+//   node src/cli.ts start [--harness opencode|orca] [--model <claude model, for orca>]
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +11,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import type { OpencodeClient } from '@opencode-ai/sdk/v2';
 import { type Job, refine, type RunEvent, startOpencode } from './adapters/opencode.ts';
+import { checkOrca, refineWithOrca } from './adapters/orca.ts';
 import { checkCheckout, escapingSymlinks, exportCommit, scrub, snapshot, verifyEvidence } from './repository.ts';
 
 const CONFIG = process.env.AI_KANBAN_WORKER_CONFIG ?? path.join(os.homedir(), '.config', 'ai-kanban', 'worker.json');
@@ -17,6 +19,7 @@ const DEFAULT_MODELS = ['opencode/deepseek-v4.1-flash-free']; // tried in order;
 const RUN_TIMEOUT_MS = 15 * 60_000;
 
 type Config = { apiUrl: string; token: string; name: string; repositories: Record<string, string>; models: string[] };
+type Harness = { kind: 'opencode'; client: OpencodeClient } | { kind: 'orca'; model?: string };
 
 const load = async (): Promise<Config> => JSON.parse(await readFile(CONFIG, 'utf8'));
 async function save(config: Config) {
@@ -65,12 +68,25 @@ async function allow([repository, dir]: string[]) {
   for (const [repo, folder] of Object.entries(config.repositories)) console.log(`  ${repo}  ${folder}`);
 }
 
-async function start() {
+async function start(args: string[]) {
+  const { values } = parseArgs({ args, options: { harness: { type: 'string', default: 'opencode' }, model: { type: 'string' } } });
+  if (values.harness !== 'opencode' && values.harness !== 'orca') throw new Error('--harness must be opencode or orca');
+  if (values.model && values.harness !== 'orca') throw new Error('--model is for --harness orca; OpenCode models come from the config file');
   const config = await load();
   const repositories = Object.keys(config.repositories).map((r) => r.toLowerCase()); // GitHub names are case-insensitive
   if (!repositories.length) throw new Error('no repositories allowed yet; run: allow <owner/name> <path>');
-  const { client, server } = await startOpencode(path.join(path.dirname(CONFIG), 'opencode-config'));
-  console.log(`Worker "${config.name}" polling ${config.apiUrl} for ${repositories.join(', ')} (models: ${config.models.join(', ')})`);
+  let harness: Harness;
+  let server: { close(): void } | undefined;
+  if (values.harness === 'orca') {
+    await checkOrca();
+    harness = { kind: 'orca', model: values.model };
+  } else {
+    const opencode = await startOpencode(path.join(path.dirname(CONFIG), 'opencode-config'));
+    harness = { kind: 'opencode', client: opencode.client };
+    server = opencode.server;
+  }
+  const using = harness.kind === 'orca' ? `Claude Code via Orca, model: ${harness.model ?? 'default'}` : `models: ${config.models.join(', ')}`;
+  console.log(`Worker "${config.name}" polling ${config.apiUrl} for ${repositories.join(', ')} (${using})`);
 
   let stopping = false;
   let current: AbortController | undefined;
@@ -87,7 +103,7 @@ async function start() {
     if (claim.status === 200) {
       current = new AbortController();
       if (stopping) current.abort(new Error('worker stopped')); // Ctrl+C arrived while claiming: hand the run back as failed
-      await runJob(config, client, claim.body, current);
+      await runJob(config, harness, claim.body, current);
       current = undefined;
     } else {
       if (claim.status !== 204) console.error(`claim failed (${claim.status}): ${JSON.stringify(claim.body)}`);
@@ -95,10 +111,10 @@ async function start() {
       await sleep(claim.status === 204 ? 3000 : 10_000);
     }
   }
-  server.close();
+  server?.close();
 }
 
-async function runJob(config: Config, client: OpencodeClient, job: Job, ac: AbortController) {
+async function runJob(config: Config, harness: Harness, job: Job, ac: AbortController) {
   const dir = Object.entries(config.repositories).find(([repo]) => repo.toLowerCase() === job.repository)?.[1] ?? '';
   let work: string | undefined; // the export the agent reads
   // Nothing that leaves the worker (events, errors, the spec) carries this machine's paths.
@@ -149,12 +165,16 @@ async function runJob(config: Config, client: OpencodeClient, job: Job, ac: Abor
     const links = await escapingSymlinks(work);
     if (links.length) throw new Error(`refusing to read a commit whose symlinks point outside it: ${links.slice(0, 5).join(', ')}`);
     pending.push({ kind: 'inspecting', data: snap });
-    const result = await refine({ client, dir: work, job, commitSha, models: config.models, signal: ac.signal, onEvent: (e) => pending.push(e) });
+    const onEvent = (e: RunEvent) => pending.push(e);
+    const result =
+      harness.kind === 'orca'
+        ? await refineWithOrca({ checkout: dir, dir: work, job, commitSha, model: harness.model, signal: ac.signal, onEvent })
+        : await refine({ client: harness.client, dir: work, job, commitSha, models: config.models, signal: ac.signal, onEvent });
     result.spec.evidence = await verifyEvidence(work, result.spec.evidence);
     const spec = JSON.parse(await clean(JSON.stringify(result.spec))); // models copy absolute paths into prose
     clearInterval(ticker);
     await flush().catch(() => {}); // progress lines are nice to have; the spec isn't
-    const res = await call(config, 'POST', `/worker/runs/${job.id}/complete`, { ...result, spec, commitSha });
+    const res = await call(config, 'POST', `/worker/runs/${job.id}/complete`, { ...result, spec, commitSha, harness: harness.kind });
     if (res.status === 200) return console.log(`Spec v${res.body.version} ready for "${job.task.title}"`);
     if (res.status === 409) return console.log('Run was cancelled; result discarded');
     throw new Error(`the API rejected the spec (${res.status}): ${JSON.stringify(res.body).slice(0, 1000)}`);
@@ -162,7 +182,7 @@ async function runJob(config: Config, client: OpencodeClient, job: Job, ac: Abor
     const error = await clean(ac.signal.aborted ? (ac.signal.reason as Error).message : (e as Error).message);
     clearInterval(ticker);
     await flush().catch(() => {});
-    const res = await call(config, 'POST', `/worker/runs/${job.id}/fail`, { error: error.slice(0, 2000), ...(commitSha ? { commitSha } : {}) }).catch(() => undefined);
+    const res = await call(config, 'POST', `/worker/runs/${job.id}/fail`, { error: error.slice(0, 2000), harness: harness.kind, ...(commitSha ? { commitSha } : {}) }).catch(() => undefined);
     console.error(`Refinement failed: ${error}${res?.status === 409 ? ' (run already cancelled)' : ''}`);
   } finally {
     clearInterval(ticker);
@@ -172,9 +192,9 @@ async function runJob(config: Config, client: OpencodeClient, job: Job, ac: Abor
 }
 
 const [command, ...rest] = process.argv.slice(2);
-const commands: Record<string, (args: string[]) => Promise<void>> = { register, allow, start: () => start() };
+const commands: Record<string, (args: string[]) => Promise<void>> = { register, allow, start };
 if (!commands[command]) {
-  console.error('usage: cli.ts register --login <name> | allow <owner/name> <path> | start');
+  console.error('usage: cli.ts register --login <name> | allow <owner/name> <path> | start [--harness opencode|orca] [--model <id>]');
   process.exit(2);
 }
 await commands[command](rest).catch((e: Error) => {

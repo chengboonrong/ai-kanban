@@ -215,6 +215,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
     model: { type: 'string', maxLength: 200 },
     sessionId: { type: 'string', maxLength: 200 },
     commitSha: { type: 'string', pattern: '^[0-9a-f]{40,64}$' },
+    harness: { type: 'string', enum: ['opencode', 'orca'] },
   };
 
   app.post(
@@ -233,7 +234,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
     },
     async (req) => {
       const { id } = req.params as Id;
-      const b = req.body as { model: string; sessionId?: string; commitSha: string; tokenUsage?: object; cost?: number; spec: object };
+      const b = req.body as { model: string; sessionId?: string; commitSha: string; harness?: string; tokenUsage?: object; cost?: number; spec: object };
       return tx(pool, async (c) => {
         // Task before run, the same order a task delete takes them in; also serialises with approve.
         await c.query('SELECT 1 FROM tasks WHERE id = (SELECT task_id FROM agent_runs WHERE id = $1) FOR UPDATE', [id]);
@@ -245,8 +246,8 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
         );
         await c.query(
           `UPDATE agent_runs SET state = 'succeeded', completed_at = now(), model = $2, session_id = $3, repository_commit_sha = $4,
-             token_usage = $5, cost = $6 WHERE id = $1`,
-          [id, b.model, b.sessionId ?? null, b.commitSha, b.tokenUsage ?? null, b.cost ?? null],
+             token_usage = $5, cost = $6, harness = COALESCE($7, harness) WHERE id = $1`,
+          [id, b.model, b.sessionId ?? null, b.commitSha, b.tokenUsage ?? null, b.cost ?? null, b.harness ?? null],
         );
         await logActivity(c, run.task_id, run.requested_by, 'spec_ready', { version: spec.version });
         return spec;
@@ -270,15 +271,15 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
     },
     async (req, reply) => {
       const { id } = req.params as Id;
-      const b = req.body as { error: string; model?: string; sessionId?: string; commitSha?: string };
+      const b = req.body as { error: string; model?: string; sessionId?: string; commitSha?: string; harness?: string };
       await tx(pool, async (c) => {
         // Task before run, the same order a task delete takes them in.
         await c.query('SELECT 1 FROM tasks WHERE id = (SELECT task_id FROM agent_runs WHERE id = $1) FOR UPDATE', [id]);
         const run = await activeRunForWorker(c, id, req.workerId);
         await c.query(
-          `UPDATE agent_runs SET state = 'failed', completed_at = now(), error = $2, model = $3, session_id = $4, repository_commit_sha = $5
-           WHERE id = $1`,
-          [id, b.error, b.model ?? null, b.sessionId ?? null, b.commitSha ?? null],
+          `UPDATE agent_runs SET state = 'failed', completed_at = now(), error = $2, model = $3, session_id = $4, repository_commit_sha = $5,
+             harness = COALESCE($6, harness) WHERE id = $1`,
+          [id, b.error, b.model ?? null, b.sessionId ?? null, b.commitSha ?? null, b.harness ?? null],
         );
         await logActivity(c, run.task_id, run.requested_by, 'refinement_failed', { error: b.error });
       });

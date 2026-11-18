@@ -133,7 +133,7 @@ test('a run streams events, stores a validated spec version, and the latest vers
   // Refine again: a second version supersedes the first.
   assert.equal((await api('POST', `/tasks/${task.id}/runs`)).statusCode, 201);
   const run2 = (await worker('POST', '/worker/claim', { repositories: [repository] })).json();
-  const v2 = (await worker('POST', `/worker/runs/${run2.id}/complete`, done(spec('Add GitHub sign-in')))).json();
+  const v2 = (await worker('POST', `/worker/runs/${run2.id}/complete`, { ...done(spec('Add GitHub sign-in')), harness: 'orca' })).json();
   assert.equal(v2.version, 2);
   assert.equal((await api('POST', `/specs/${v1.id}/approve`)).statusCode, 409);
   const approved = await api('POST', `/specs/${v2.id}/approve`);
@@ -144,6 +144,7 @@ test('a run streams events, stores a validated spec version, and the latest vers
   const refinement = (await api('GET', `/tasks/${task.id}/refinement`)).json();
   assert.equal(refinement.spec.content.title, 'Add GitHub sign-in');
   assert.equal(refinement.run.commitSha, 'a'.repeat(40));
+  assert.equal(refinement.run.harness, 'orca', 'the run records the harness the worker used');
   const kinds = (await api('GET', `/tasks/${task.id}`)).json().activity.map((a: { kind: string }) => a.kind);
   assert.deepEqual(kinds, ['created', 'refinement_requested', 'spec_ready', 'refinement_requested', 'spec_ready', 'spec_approved']);
 });

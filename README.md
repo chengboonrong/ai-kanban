@@ -141,6 +141,21 @@ agent reads a copy of the checkout's current commit, so untracked files such as 
 never reach it. It can only read, list, glob and grep there, and ignores the repository's own OpenCode config,
 `AGENTS.md` and plugins, as well as your personal OpenCode setup. Models are set in `worker.json`.
 
+#### With Claude Code in Orca
+
+If you use the Orca app and Claude Code, the worker can refine through them instead, on your Claude
+Code sign-in:
+
+```sh
+npm start -- --harness orca [--model sonnet]    # needs the Orca app running and the checkout added to Orca
+```
+
+Each run opens a terminal in that repository's Orca workspace, titled after the card. Orca's own agent launch uses your
+agent settings, which can allow anything, so the worker starts Claude Code itself with `--restricted`, `--safe-mode`,
+`--strict-mcp-config` and only `Read`, `Glob` and `Grep` available. That means no shell, no web access, no reads outside
+the exported commit, and none of the repository's or your own `CLAUDE.md`, hooks, plugins or MCP servers. Only the
+local Orca app is supported, not remote Orca environments.
+
 To regenerate the screenshots and demo in `docs/media`, keep the API running and run
 `apps/flutter_app/tool/readme_media.sh` (macOS; drives the app with a `demo` account and needs ffmpeg).
 
