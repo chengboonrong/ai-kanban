@@ -119,30 +119,61 @@ async function loadBoard(db: Db, boardId: string) {
 export const logActivity = (db: Db, taskId: string, actorId: string, kind: string, data: object = {}) =>
   db.query('INSERT INTO task_activity (task_id, actor_id, kind, data) VALUES ($1, $2, $3, $4)', [taskId, actorId, kind, data]);
 
+/** A reviewer's comments on one spec version, for the run that revises it (validated by POST /tasks/:id/runs). */
+export type Feedback = { specVersion: number; general?: string; items?: { section: string; index: number; comment: string }[] };
+
 /** Queues a refinement unless one is already queued or running for the task; returns the active run either way. */
 export async function enqueueRun(
   db: Db,
   taskId: string,
   userId: string,
   repository: string,
-  retry?: { attempt: number; retryReason: string },
+  opts: { retry?: { attempt: number; retryReason: string }; feedback?: Feedback | null } = {},
 ) {
+  const { retry, feedback = null } = opts;
   const { rows } = await db.query(
-    `INSERT INTO agent_runs (task_id, requested_by, repository, attempt, retry_reason) VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO agent_runs (task_id, requested_by, repository, attempt, retry_reason, feedback) VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (task_id) WHERE state IN ('queued', 'running') DO NOTHING RETURNING id`,
-    [taskId, userId, repository, retry?.attempt ?? 1, retry?.retryReason ?? null],
+    [taskId, userId, repository, retry?.attempt ?? 1, retry?.retryReason ?? null, feedback],
   );
   if (rows[0] && retry) await logActivity(db, taskId, userId, 'refinement_retried', { reason: retry.retryReason, attempt: retry.attempt });
-  else if (rows[0]) await logActivity(db, taskId, userId, 'refinement_requested');
+  else if (rows[0]) {
+    // The general note counts as a comment, as the app counts it on the button.
+    const data = feedback ? { comments: (feedback.items?.length ?? 0) + (feedback.general ? 1 : 0) } : {};
+    await logActivity(db, taskId, userId, 'refinement_requested', data);
+  }
   const { rows: [run] } = await db.query(`SELECT ${RUN('$2')} FROM agent_runs WHERE task_id = $1 AND state IN ('queued', 'running')`, [
     taskId,
     userId,
   ]);
-  if (!run) return enqueueRun(db, taskId, userId, repository, retry); // the active run ended in between: queue a new one
+  if (!run) return enqueueRun(db, taskId, userId, repository, opts); // the active run ended in between: queue a new one
   return { run, created: !!rows[0] };
 }
 
 const columnName = async (db: Db, id: string) => (await db.query('SELECT name FROM columns WHERE id = $1', [id])).rows[0]?.name;
+
+/** Adds a card at the end of its column (the board's first unless given) and refines it; the caller holds the board lock. */
+export async function addTask(
+  c: pg.PoolClient,
+  boardId: string,
+  userId: string,
+  { title, description, columnId, key }: { title: string; description: string; columnId?: string; key?: string },
+) {
+  const { rows: [col] } = columnId
+    ? await c.query('SELECT id FROM columns WHERE id = $1 AND board_id = $2', [columnId, boardId])
+    : await c.query('SELECT id FROM columns WHERE board_id = $1 ORDER BY position LIMIT 1', [boardId]);
+  if (!col) throw httpError(400, columnId ? 'columnId is not on this board' : 'board has no columns');
+  const { rows: [task] } = await c.query(
+    `INSERT INTO tasks (board_id, column_id, title, description, position, created_by, idempotency_key)
+     VALUES ($1, $2, $3, $4, (SELECT count(*) FROM tasks WHERE column_id = $2), $5, $6) RETURNING ${TASK}`,
+    [boardId, col.id, title, description, userId, key ?? null],
+  );
+  await logActivity(c, task.id, userId, 'created', { title, column: await columnName(c, col.id) });
+  // refinement.auto_start: a board with a repository refines every new card.
+  const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1', [boardId]);
+  if (board.repository) await enqueueRun(c, task.id, userId, board.repository);
+  return task;
+}
 
 export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
   // ---- Workspaces ----
@@ -321,20 +352,7 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
           const { rows } = await c.query(`SELECT ${TASK} FROM tasks WHERE board_id = $1 AND idempotency_key = $2`, [boardId, key]);
           if (rows[0]) return { task: rows[0], created: false };
         }
-        const { rows: [col] } = columnId
-          ? await c.query('SELECT id FROM columns WHERE id = $1 AND board_id = $2', [columnId, boardId])
-          : await c.query('SELECT id FROM columns WHERE board_id = $1 ORDER BY position LIMIT 1', [boardId]);
-        if (!col) throw httpError(400, columnId ? 'columnId is not on this board' : 'board has no columns');
-        const { rows: [task] } = await c.query(
-          `INSERT INTO tasks (board_id, column_id, title, description, position, created_by, idempotency_key)
-           VALUES ($1, $2, $3, $4, (SELECT count(*) FROM tasks WHERE column_id = $2), $5, $6) RETURNING ${TASK}`,
-          [boardId, col.id, title, description, req.userId, key ?? null],
-        );
-        await logActivity(c, task.id, req.userId, 'created', { title, column: await columnName(c, col.id) });
-        // refinement.auto_start: a board with a repository refines every new card.
-        const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1', [boardId]);
-        if (board.repository) await enqueueRun(c, task.id, req.userId, board.repository);
-        return { task, created: true };
+        return { task: await addTask(c, boardId, req.userId, { title, description, columnId, key }), created: true };
       });
       return reply.code(result.created ? 201 : 200).send(result.task);
     },

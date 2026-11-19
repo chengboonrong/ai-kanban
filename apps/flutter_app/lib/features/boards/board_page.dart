@@ -111,6 +111,8 @@ class BoardNotifier extends AsyncNotifier<Board> {
   Future<void> reload() => _mutate(() async {});
   Future<void> setRepository(String? repository) =>
       _mutate(() => _api.setRepository(boardId, repository));
+  Future<void> importIssue(int number) =>
+      _mutate(() => _api.importIssue(boardId, number));
   Future<void> addColumn(String name) =>
       _mutate(() => _api.addColumn(boardId, name));
   Future<void> renameColumn(String id, String name) =>
@@ -161,6 +163,16 @@ class BoardPage extends ConsumerWidget {
                   }
                   return;
                 }
+                if (choice == 'import') {
+                  final number = await pickIssueToImport(context, boardId);
+                  if (number != null && context.mounted) {
+                    await runWithFeedback(
+                      context,
+                      () => notifier.importIssue(number),
+                    );
+                  }
+                  return;
+                }
                 final repo = await promptText(
                   context,
                   'GitHub repository (owner/name)',
@@ -183,11 +195,16 @@ class BoardPage extends ConsumerWidget {
                         : 'Change repository…',
                   ),
                 ),
-                if (board.repository != null)
-                  const PopupMenuItem(
+                if (board.repository != null) ...const [
+                  PopupMenuItem(
+                    value: 'import',
+                    child: Text('Import GitHub issue…'),
+                  ),
+                  PopupMenuItem(
                     value: 'disconnect',
                     child: Text('Disconnect repository'),
                   ),
+                ],
               ],
             ),
           IconButton(
