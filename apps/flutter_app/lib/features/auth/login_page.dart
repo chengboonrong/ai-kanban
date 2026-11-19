@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
 import '../../core/theme.dart';
+import '../../core/widgets.dart';
 import 'auth.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -48,7 +49,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
+            constraints: const BoxConstraints(maxWidth: 420),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -58,6 +59,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 Text(
                   'Local development sign-in. The API must be running with AUTH_MODE=dev.',
                   style: theme.textTheme.bodyMedium?.copyWith(color: t.muted),
+                ),
+                const SizedBox(height: 24),
+                // What the code proves about sign-in: which API it asks, and that a login name is all it takes.
+                HeaderBlock(
+                  lines: [
+                    'Server: ${Uri.base.resolve(apiUrl)}',
+                    'Sign-in: login name, no password',
+                  ],
                 ),
                 const SizedBox(height: 24),
                 // 8px vertical padding brings the field to the button's 40px.
@@ -79,7 +88,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     style: theme.textTheme.bodySmall?.copyWith(color: t.danger),
                   ),
                 ],
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 FilledButton(
                   onPressed: _busy ? null : _submit,
                   child: const Text('Sign in (dev)'),

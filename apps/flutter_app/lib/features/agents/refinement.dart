@@ -71,7 +71,12 @@ final runEventsProvider = StreamProvider.autoDispose
       }
     });
 
-/// The task's AI spec: request a refinement, follow it live, then review and approve the result.
+void _refresh(WidgetRef ref, String boardId, String taskId) {
+  ref.invalidate(refinementProvider(taskId));
+  ref.invalidate(boardProvider(boardId));
+}
+
+/// The task's AI spec: follow a refinement live, then read the result. Its actions live in [RefinementBar].
 class RefinementPanel extends ConsumerWidget {
   const RefinementPanel({
     super.key,
@@ -82,127 +87,212 @@ class RefinementPanel extends ConsumerWidget {
   final String boardId, taskId;
   final String? repository;
 
-  void _refresh(WidgetRef ref) {
-    ref.invalidate(refinementProvider(taskId));
-    ref.invalidate(boardProvider(boardId));
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final t = context.tokens;
-    final api = ref.read(apiProvider);
     final async = ref.watch(refinementProvider(taskId));
     final r = async.value;
     final run = r?.run, spec = r?.spec;
-    final quiet = theme.textTheme.bodyMedium?.copyWith(color: t.muted);
+    final quiet = theme.textTheme.bodyLarge?.copyWith(color: t.muted);
+    // With a spec, its header block opens the section; before one, a plain heading does.
+    final heading = Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text('AI spec', style: theme.textTheme.titleMedium),
+    );
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          padding: const EdgeInsets.only(bottom: 8),
-          decoration: BoxDecoration(border: Border(bottom: t.inkRule)),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text('AI spec', style: theme.textTheme.titleMedium),
-              ),
-              if (repository != null && r != null)
-                if (run != null && run.active)
-                  TextButton(
-                    onPressed: () => runWithFeedback(context, () async {
-                      await api.cancelRun(run.id);
-                      _refresh(ref);
-                    }),
-                    child: const Text('Cancel'),
-                  )
-                else
-                  OutlinedButton(
-                    onPressed: () => runWithFeedback(context, () async {
-                      await api.refine(taskId);
-                      _refresh(ref);
-                    }),
-                    child: Text(
-                      spec == null ? 'Refine with AI' : 'Refine again',
-                    ),
-                  ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (repository == null)
-          Text(
-            'Connect a GitHub repository to this board (the link icon on the board) and a worker can turn this brief into a spec.',
-            style: quiet,
-          )
-        else
-          switch (async) {
-            AsyncValue(:final error?) when r == null => Text(
-              errorMessage(error),
-              style: theme.textTheme.bodyMedium?.copyWith(color: t.danger),
+    if (repository == null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          heading,
+          _measure(
+            Text(
+              'Connect a GitHub repository to this board (the link icon on the board) and a worker can turn this brief into a spec.',
+              style: quiet,
             ),
-            _ when r == null => const LinearProgressIndicator(),
-            _ => Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (run != null && run.active)
-                  _LiveRun(
-                    run: run,
-                    waiting: r.waiting,
-                    repository: repository!,
-                    onChange: () => _refresh(ref),
-                  ),
-                if (run != null && run.state == 'failed')
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: Row(
+          ),
+        ],
+      );
+    }
+    return switch (async) {
+      AsyncValue(:final error?) when r == null => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          heading,
+          Text(
+            errorMessage(error),
+            style: theme.textTheme.bodyLarge?.copyWith(color: t.danger),
+          ),
+        ],
+      ),
+      _ when r == null => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [heading, const LinearProgressIndicator(minHeight: 2)],
+      ),
+      _ => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (spec == null) heading,
+          if (run != null && run.active)
+            _LiveRun(
+              run: run,
+              waiting: r.waiting,
+              repository: repository!,
+              onChange: () => _refresh(ref, boardId, taskId),
+            ),
+          if (run != null && run.state == 'failed')
+            Padding(
+              padding: const EdgeInsets.only(bottom: 24),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const StatusChip(label: 'Failed', tone: StatusTone.bad),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const StatusChip(label: 'Failed', tone: StatusTone.bad),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('The last refinement failed'),
-                              Text(
-                                run.error ?? '',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: t.danger,
-                                ),
-                              ),
-                            ],
+                        const Text('The last refinement failed'),
+                        Text(
+                          run.error ?? '',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: t.danger,
                           ),
                         ),
                       ],
                     ),
                   ),
-                if (spec != null)
-                  _SpecView(
-                    spec: spec,
-                    stale: run != null && run.active,
-                    // A succeeded run is the one that wrote the newest spec.
-                    madeBy: run != null && run.state == 'succeeded'
-                        ? run
-                        : null,
-                    onApprove: () => runWithFeedback(context, () async {
-                      await api.approveSpec(spec.id);
-                      _refresh(ref);
-                    }),
-                  )
-                else if (run == null)
-                  Text(
-                    'The Refiner reads $repository on your worker, read-only, and writes requirements, acceptance criteria '
-                    'and the code it found. You approve it before anything else happens.',
-                    style: quiet,
-                  ),
-              ],
+                ],
+              ),
             ),
-          },
-      ],
+          if (spec != null)
+            _SpecView(
+              spec: spec,
+              repository: repository!,
+              stale: run != null && run.active,
+              // A succeeded run is the one that wrote the newest spec.
+              madeBy: run != null && run.state == 'succeeded' ? run : null,
+            )
+          else if (run == null)
+            _measure(
+              Text(
+                'The Refiner reads $repository on your worker, read-only, and writes requirements, acceptance criteria '
+                'and the code it found. You approve it before anything else happens.',
+                style: quiet,
+              ),
+            ),
+        ],
+      ),
+    };
+  }
+}
+
+/// The spec's actions, pinned under the spec column: approve (the page's one red act), refine, or cancel a run.
+class RefinementBar extends ConsumerWidget {
+  const RefinementBar({
+    super.key,
+    required this.boardId,
+    required this.taskId,
+    required this.repository,
+    required this.padding,
+  });
+  final String boardId, taskId;
+  final String? repository;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final r = ref.watch(refinementProvider(taskId)).value;
+    if (repository == null || r == null) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final t = context.tokens;
+    final api = ref.read(apiProvider);
+    final run = r.run, spec = r.spec;
+    final active = run != null && run.active;
+    final approvable = spec != null && !spec.approved && !active;
+    Future<void> act(Future<void> Function() call) =>
+        runWithFeedback(context, () async {
+          await call();
+          _refresh(ref, boardId, taskId);
+        });
+    Future<void> refine() => act(() => api.refine(taskId));
+
+    return Container(
+      width: double.infinity,
+      padding: padding,
+      decoration: BoxDecoration(
+        color: t.paper,
+        border: Border(top: t.hairline),
+      ),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          if (approvable)
+            FilledButton(
+              style: t.normative,
+              onPressed: () => act(() => api.approveSpec(spec.id)),
+              child: const Text('Approve spec'),
+            ),
+          if (active)
+            OutlinedButton(
+              onPressed: () => act(() => api.cancelRun(run.id)),
+              child: const Text('Cancel'),
+            )
+          else if (spec == null)
+            FilledButton(
+              style: t.normative,
+              onPressed: refine,
+              child: const Text('Refine with AI'),
+            )
+          else
+            OutlinedButton(
+              onPressed: refine,
+              child: const Text('Refine again'),
+            ),
+          if (approvable)
+            Text(
+              'Approving queues one GitHub issue.',
+              style: theme.textTheme.bodyMedium?.copyWith(color: t.muted),
+            ),
+        ],
+      ),
     );
   }
+}
+
+/// Prose keeps a readable measure inside the wider spec column.
+Widget _measure(Widget child) => Align(
+  alignment: Alignment.centerLeft,
+  child: ConstrainedBox(
+    constraints: const BoxConstraints(maxWidth: 680),
+    child: child,
+  ),
+);
+
+final _normative = RegExp(
+  r'\b(MUST NOT|SHALL NOT|SHOULD NOT|MUST|SHALL|SHOULD|MAY|REQUIRED)\b',
+);
+
+/// [text] with the RFC 2119 keywords the agent wrote set in normative red small caps. Adds none of its own.
+Text _withKeywords(String text, TextStyle style, Tokens t) {
+  final keyword = style.copyWith(
+    color: t.accent,
+    fontWeight: FontWeight.w700,
+    fontFeatures: const [FontFeature('c2sc')],
+    letterSpacing: 0.6,
+  );
+  final spans = <TextSpan>[];
+  var at = 0;
+  for (final m in _normative.allMatches(text)) {
+    if (m.start > at) spans.add(TextSpan(text: text.substring(at, m.start)));
+    spans.add(TextSpan(text: m[0], style: keyword));
+    at = m.end;
+  }
+  if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
+  return Text.rich(TextSpan(children: spans), style: style);
 }
 
 String _short(Object? sha) =>
@@ -255,11 +345,16 @@ class _LiveRun extends ConsumerWidget {
     final events = progress?.events ?? const <RunEvent>[];
     final theme = Theme.of(context);
     final t = context.tokens;
-    final line = t.mono(theme.textTheme.bodySmall!);
+    final line = t.mono(theme.textTheme.bodySmall!).copyWith(color: t.ink2);
     final viewer = ref.watch(authProvider)?.user.login;
     final queued = state == 'queued';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 32),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: t.paper3,
+        borderRadius: BorderRadius.circular(Tokens.radiusCard),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -292,7 +387,15 @@ class _LiveRun extends ConsumerWidget {
                 style: theme.textTheme.bodySmall,
               ),
             ),
-          const SizedBox(height: 8),
+          if (!queued) ...[
+            const SizedBox(height: 12),
+            LinearProgressIndicator(
+              minHeight: 2,
+              color: t.ink,
+              backgroundColor: t.rule,
+            ),
+          ],
+          if (events.isNotEmpty) const SizedBox(height: 8),
           for (final e in events.reversed.take(8))
             Container(
               padding: const EdgeInsets.symmetric(vertical: 6),
@@ -309,110 +412,163 @@ class _LiveRun extends ConsumerWidget {
   }
 }
 
+/// The spec as a standards document: header block, then plain sections, then the evidence references.
 class _SpecView extends StatelessWidget {
   const _SpecView({
     required this.spec,
+    required this.repository,
     required this.stale,
     required this.madeBy,
-    required this.onApprove,
   });
   final Spec spec;
+  final String repository;
   final bool stale;
   final AgentRun? madeBy;
-  final VoidCallback onApprove;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = context.tokens;
-    Widget section(String title, List<String> items, {bool numbered = false}) =>
-        items.isEmpty
-        ? const SizedBox.shrink()
-        : Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: theme.textTheme.titleSmall),
-                for (final (i, item) in items.indexed)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text('${numbered ? '${i + 1}.' : '•'} $item'),
-                  ),
-              ],
-            ),
-          );
+    final text = theme.textTheme;
+    final prose = text.bodyLarge!;
+    final head = t.mono(text.bodySmall!).copyWith(color: t.ink, height: 1.7);
+    final ref = t.mono(text.bodyMedium!);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    Widget heading(String title) => Padding(
+      padding: const EdgeInsets.only(top: 22, bottom: 2),
+      child: Text(title, style: text.titleMedium),
+    );
+    Widget row(Widget child, {required bool first}) => Container(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(border: first ? null : Border(top: t.hairline)),
+      child: _measure(child),
+    );
+    List<Widget> section(
+      String title,
+      List<String> items, {
+      bool numbered = false,
+    }) => [
+      if (items.isNotEmpty) ...[
+        heading(title),
+        for (final (i, item) in items.indexed)
+          row(
+            _withKeywords('${numbered ? '${i + 1}.' : '•'} $item', prose, t),
+            first: i == 0,
+          ),
+      ],
+    ];
+
+    final (status, statusColor) = stale
+        ? ('Being rewritten', t.muted)
+        : spec.approved
+        ? ('Approved', t.green)
+        : ('Ready for review', t.ink);
+    final left = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(spec.title, style: theme.textTheme.titleMedium),
-            ),
-            if (spec.approved)
-              const StatusChip(label: 'Approved', tone: StatusTone.good),
-          ],
-        ),
+        Text('Repository: $repository', style: head),
         Text(
           'Version ${spec.version}${spec.commitSha == null ? '' : ' · commit ${_short(spec.commitSha)}'}'
           '${madeBy == null ? '' : ' · ${madeBy!.harnessLabel}${_on(madeBy!)}'}'
           '${stale ? ' · a new version is being written' : ''}',
-          style: theme.textTheme.bodySmall,
+          style: head,
         ),
-        const SizedBox(height: 12),
-        Text(spec.summary),
-        const SizedBox(height: 12),
+      ],
+    );
+    Widget right(CrossAxisAlignment align) => Column(
+      crossAxisAlignment: align,
+      children: [
         Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'Readiness ${spec.readiness}%',
-              style: theme.textTheme.labelLarge,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: LinearProgressIndicator(value: spec.readiness / 100),
-            ),
+            Text('Status: ', style: head),
+            Text(status, style: head.copyWith(color: statusColor)),
           ],
         ),
-        section('Acceptance criteria', spec.acceptanceCriteria),
-        section('Requirements', spec.requirements),
-        section('Open questions', spec.ambiguities),
-        section('Suggested approach', spec.approach, numbered: true),
-        if (spec.evidence.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text('Evidence in the repository', style: theme.textTheme.titleSmall),
-          for (final e in spec.evidence)
-            ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Tooltip(
-                message: e.verified
-                    ? 'Found at these lines in the commit'
-                    : 'Not found at these lines; check before relying on it',
-                child: Icon(
-                  e.verified ? Icons.check_circle_outline : Icons.help_outline,
-                  color: e.verified ? t.muted : t.danger,
-                ),
-              ),
-              title: Text(
-                '${e.path}:${e.startLine}-${e.endLine}',
-                style: t.mono(theme.textTheme.bodyMedium!),
-              ),
-              subtitle: Text(e.note),
-            ),
-        ],
-        if (!spec.approved && !stale) ...[
-          const SizedBox(height: 16),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: onApprove,
-              icon: const Icon(Icons.check),
-              label: const Text('Approve spec'),
-            ),
+        Text('Readiness: ${spec.readiness}%', style: head),
+        Text(
+          'Evidence: ${spec.evidence.length} · ${spec.evidence.where((e) => e.verified).length} verified',
+          style: head,
+        ),
+      ],
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            border: Border(top: t.headRule, bottom: t.inkRule),
           ),
+          child: LayoutBuilder(
+            builder: (context, c) => c.maxWidth < 560
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [left, right(CrossAxisAlignment.start)],
+                  )
+                : Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: left),
+                      const SizedBox(width: 24),
+                      right(CrossAxisAlignment.end),
+                    ],
+                  ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _measure(Text(spec.title, style: text.titleLarge)),
+        heading('Summary'),
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: _measure(_withKeywords(spec.summary, prose, t)),
+        ),
+        ...section('Requirements', spec.requirements),
+        ...section('Acceptance criteria', spec.acceptanceCriteria),
+        ...section('Open questions', spec.ambiguities),
+        ...section('Suggested approach', spec.approach, numbered: true),
+        if (spec.evidence.isNotEmpty) ...[
+          heading('Evidence in the repository'),
+          for (final (i, e) in spec.evidence.indexed)
+            row(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 12,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text('[E${i + 1}]', style: ref),
+                      Text('${e.path}:${e.startLine}-${e.endLine}', style: ref),
+                      Tooltip(
+                        message: e.verified
+                            ? 'Found at these lines in the commit'
+                            : 'Not found at these lines; check before relying on it',
+                        child: Text(
+                          e.verified ? 'verified' : 'unverified',
+                          style: e.verified
+                              ? ref.copyWith(color: t.green)
+                              : ref.copyWith(
+                                  color: t.muted,
+                                  decoration: TextDecoration.underline,
+                                  decorationStyle: TextDecorationStyle.dashed,
+                                  decorationColor: t.muted,
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  _withKeywords(
+                    e.note,
+                    text.bodyMedium!.copyWith(color: t.ink2),
+                    t,
+                  ),
+                ],
+              ),
+              first: i == 0,
+            ),
         ],
       ],
     );

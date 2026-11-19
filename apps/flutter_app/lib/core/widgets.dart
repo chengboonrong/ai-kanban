@@ -3,6 +3,34 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'theme.dart';
 
+/// The draft's header block: mono lines between a 2px ink rule above and a 1px ink rule below,
+/// stating what the screen holds.
+class HeaderBlock extends StatelessWidget {
+  const HeaderBlock({super.key, required this.lines});
+  final List<String> lines;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final style = t.mono(
+      Theme.of(context).textTheme.bodyMedium!
+          .copyWith(fontSize: 14, height: 1.7),
+    );
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(top: t.headRule, bottom: t.inkRule),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [for (final l in lines) Text(l, style: style)],
+        ),
+      ),
+    );
+  }
+}
+
 /// Runs [action], showing any failure as a SnackBar.
 Future<void> runWithFeedback(
   BuildContext context,
@@ -94,7 +122,7 @@ Future<bool> confirm(
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancel'),
             ),
-            // Every confirm guards a destructive step, so the fill is danger, not tangerine.
+            // Every confirm guards a destructive step: the fill is danger, the one red a confirm may carry.
             FilledButton(
               style:
                   FilledButton.styleFrom(

@@ -1,0 +1,565 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-18T18:47:45+00:00",
+  "title": "Design System: AI Kanban",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "#262626",
+          "#404040",
+          "#595959",
+          "#737373",
+          "#949494",
+          "#B8B8B8",
+          "#D9D9D9",
+          "#F2F2F2"
+        ]
+      },
+      "side-field": {
+        "role": "neutral",
+        "displayName": "Side Field",
+        "canonical": "#FAF9F7",
+        "tonalRamp": [
+          "#2B2821",
+          "#4A4335",
+          "#6A5F48",
+          "#8C7B5A",
+          "#AA9B7E",
+          "#C4BCAB",
+          "#DEDAD4",
+          "#F4F3F1"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Warm Hairline",
+        "canonical": "#E9E7E3",
+        "tonalRamp": [
+          "#292724",
+          "#45423A",
+          "#625C50",
+          "#807766",
+          "#A09888",
+          "#BEBAB1",
+          "#DBDAD6",
+          "#F3F2F2"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1A1A1A",
+        "tonalRamp": [
+          "#262626",
+          "#404040",
+          "#595959",
+          "#737373",
+          "#949494",
+          "#B8B8B8",
+          "#D9D9D9",
+          "#F2F2F2"
+        ]
+      },
+      "ink-secondary": {
+        "role": "neutral",
+        "displayName": "Ink Secondary",
+        "canonical": "#33312E",
+        "tonalRamp": [
+          "#272625",
+          "#42403D",
+          "#5D5A55",
+          "#78746D",
+          "#99958F",
+          "#BAB8B5",
+          "#DAD9D8",
+          "#F3F2F2"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "#5E5B56",
+        "tonalRamp": [
+          "#272625",
+          "#42403E",
+          "#5D5A56",
+          "#78746E",
+          "#989590",
+          "#BAB8B5",
+          "#DAD9D8",
+          "#F3F2F2"
+        ]
+      },
+      "normative-red": {
+        "role": "primary",
+        "displayName": "Normative Red",
+        "canonical": "#9A2A1F",
+        "tonalRamp": [
+          "#351A17",
+          "#5D2722",
+          "#8A3129",
+          "#BA382B",
+          "#D45F54",
+          "#DB9B95",
+          "#E8CDCA",
+          "#F6EFEE"
+        ]
+      },
+      "normative-red-soft": {
+        "role": "primary",
+        "displayName": "Normative Red Tint",
+        "canonical": "#F5E2DF",
+        "tonalRamp": [
+          "#321E1B",
+          "#572F28",
+          "#803D33",
+          "#AB4A3A",
+          "#C76F61",
+          "#D3A49C",
+          "#E4D0CD",
+          "#F5F0EF"
+        ]
+      },
+      "verified-green": {
+        "role": "secondary",
+        "displayName": "Verified Green",
+        "canonical": "#2F6B3A",
+        "tonalRamp": [
+          "#1E2F21",
+          "#2E5135",
+          "#3D7647",
+          "#499D58",
+          "#6EBA7C",
+          "#A3CCAB",
+          "#D0E1D3",
+          "#F0F5F1"
+        ]
+      },
+      "verified-green-soft": {
+        "role": "secondary",
+        "displayName": "Verified Green Tint",
+        "canonical": "#E4EFE5",
+        "tonalRamp": [
+          "#212C22",
+          "#344B36",
+          "#476C4A",
+          "#578E5C",
+          "#7BAD80",
+          "#AAC5AD",
+          "#D3DED4",
+          "#F1F4F1"
+        ]
+      },
+      "paper-dark": {
+        "role": "neutral",
+        "displayName": "Paper (dark)",
+        "canonical": "#151413",
+        "tonalRamp": [
+          "#262626",
+          "#404040",
+          "#595959",
+          "#737373",
+          "#949494",
+          "#B8B8B8",
+          "#D9D9D9",
+          "#F2F2F2"
+        ],
+        "theme": "dark"
+      },
+      "sheet-dark": {
+        "role": "neutral",
+        "displayName": "Raised Sheet (dark)",
+        "canonical": "#221F1D",
+        "tonalRamp": [
+          "#262626",
+          "#404040",
+          "#595959",
+          "#737373",
+          "#949494",
+          "#B8B8B8",
+          "#D9D9D9",
+          "#F2F2F2"
+        ],
+        "theme": "dark"
+      },
+      "side-field-dark": {
+        "role": "neutral",
+        "displayName": "Side Field (dark)",
+        "canonical": "#1B1A18",
+        "tonalRamp": [
+          "#2B2821",
+          "#4A4335",
+          "#6A5F48",
+          "#8C7B5A",
+          "#AA9B7E",
+          "#C4BCAB",
+          "#DEDAD4",
+          "#F4F3F1"
+        ],
+        "theme": "dark"
+      },
+      "rule-dark": {
+        "role": "neutral",
+        "displayName": "Warm Hairline (dark)",
+        "canonical": "#34312D",
+        "tonalRamp": [
+          "#292724",
+          "#45423A",
+          "#625C50",
+          "#807766",
+          "#A09888",
+          "#BEBAB1",
+          "#DBDAD6",
+          "#F3F2F2"
+        ],
+        "theme": "dark"
+      },
+      "ink-dark": {
+        "role": "neutral",
+        "displayName": "Ink (dark)",
+        "canonical": "#ECEAE6",
+        "tonalRamp": [
+          "#262626",
+          "#404040",
+          "#595959",
+          "#737373",
+          "#949494",
+          "#B8B8B8",
+          "#D9D9D9",
+          "#F2F2F2"
+        ],
+        "theme": "dark"
+      },
+      "ink-secondary-dark": {
+        "role": "neutral",
+        "displayName": "Ink Secondary (dark)",
+        "canonical": "#D6D3CE",
+        "tonalRamp": [
+          "#272625",
+          "#42403D",
+          "#5D5A55",
+          "#78746D",
+          "#99958F",
+          "#BAB8B5",
+          "#DAD9D8",
+          "#F3F2F2"
+        ],
+        "theme": "dark"
+      },
+      "muted-dark": {
+        "role": "neutral",
+        "displayName": "Muted Ink (dark)",
+        "canonical": "#A19D96",
+        "tonalRamp": [
+          "#272625",
+          "#42403E",
+          "#5D5A56",
+          "#78746E",
+          "#989590",
+          "#BAB8B5",
+          "#DAD9D8",
+          "#F3F2F2"
+        ],
+        "theme": "dark"
+      },
+      "normative-red-dark": {
+        "role": "primary",
+        "displayName": "Normative Red (dark)",
+        "canonical": "#E5735F",
+        "tonalRamp": [
+          "#351A17",
+          "#5D2722",
+          "#8A3129",
+          "#BA382B",
+          "#D45F54",
+          "#DB9B95",
+          "#E8CDCA",
+          "#F6EFEE"
+        ],
+        "theme": "dark"
+      },
+      "normative-red-soft-dark": {
+        "role": "primary",
+        "displayName": "Normative Red Tint (dark)",
+        "canonical": "#4A231D",
+        "tonalRamp": [
+          "#321E1B",
+          "#572F28",
+          "#803D33",
+          "#AB4A3A",
+          "#C76F61",
+          "#D3A49C",
+          "#E4D0CD",
+          "#F5F0EF"
+        ],
+        "theme": "dark"
+      },
+      "verified-green-dark": {
+        "role": "secondary",
+        "displayName": "Verified Green (dark)",
+        "canonical": "#85C291",
+        "tonalRamp": [
+          "#1E2F21",
+          "#2E5135",
+          "#3D7647",
+          "#499D58",
+          "#6EBA7C",
+          "#A3CCAB",
+          "#D0E1D3",
+          "#F0F5F1"
+        ],
+        "theme": "dark"
+      },
+      "verified-green-soft-dark": {
+        "role": "secondary",
+        "displayName": "Verified Green Tint (dark)",
+        "canonical": "#1D3322",
+        "tonalRamp": [
+          "#212C22",
+          "#344B36",
+          "#476C4A",
+          "#578E5C",
+          "#7BAD80",
+          "#AAC5AD",
+          "#D3DED4",
+          "#F1F4F1"
+        ],
+        "theme": "dark"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Editable task title at desktop width."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Task title on phones."
+      },
+      "title-large": {
+        "displayName": "Title Large",
+        "purpose": "App bar titles, the spec title, dialog titles."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Spec section headings and the Activity heading."
+      },
+      "title-small": {
+        "displayName": "Title Small",
+        "purpose": "Task row titles, column names."
+      },
+      "body-large": {
+        "displayName": "Body Large",
+        "purpose": "Spec prose at a 680px measure."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default UI text, inputs, dialogs, list tiles."
+      },
+      "body-small": {
+        "displayName": "Body Small",
+        "purpose": "Secondary muted lines."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons."
+      },
+      "label-medium": {
+        "displayName": "Label Medium",
+        "purpose": "Chips, column tag, tooltips."
+      },
+      "mono-header": {
+        "displayName": "Mono Header",
+        "purpose": "HeaderBlock lines (12.5-13px, 1.7 line height)."
+      },
+      "mono-reference": {
+        "displayName": "Mono Reference",
+        "purpose": "Evidence references: [En] path:start-end verified."
+      }
+    },
+    "shadows": [
+      {
+        "name": "card-in-hand",
+        "value": "0 6px 16px rgba(26,26,26,0.18)",
+        "purpose": "The task row being dragged on the board."
+      },
+      {
+        "name": "lane-in-hand",
+        "value": "Material elevation 3, shadow colour ink at 25%",
+        "purpose": "A board column being reordered."
+      }
+    ],
+    "motion": [
+      {
+        "name": "micro",
+        "value": "120ms",
+        "purpose": "Button and task-row state changes."
+      },
+      {
+        "name": "short",
+        "value": "200ms ease-out fade",
+        "purpose": "Route transitions; none under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "phone",
+        "value": "600px",
+        "purpose": "Task title drops to headline; board lanes become 85% of the viewport."
+      },
+      {
+        "name": "header-stack",
+        "value": "560px",
+        "purpose": "Spec header block stacks its two columns."
+      },
+      {
+        "name": "wide",
+        "value": "1100px",
+        "purpose": "Task page shows the 360px activity rail beside the spec column."
+      }
+    ],
+    "provenance": {
+      "world": "Internet-Draft (IETF RFC standards document)",
+      "seed": "seed:9edb3df007981102",
+      "replaces": "Furrow warm-paper ledger (undocumented)"
+    }
+  },
+  "components": [
+    {
+      "name": "Normative Button",
+      "kind": "button",
+      "refersTo": "button-normative",
+      "description": "The one act a screen exists for: Approve spec, Refine with AI.",
+      "html": "<button class=\"ds-btn-normative\">Approve spec</button>",
+      "css": ".ds-btn-normative{font-family:'Source Sans 3',sans-serif;font-size:15px;font-weight:600;height:40px;padding:0 18px;border-radius:6px;background:#9A2A1F;color:#FFFFFF;border:1px solid #9A2A1F;cursor:pointer;transition:background .12s}.ds-btn-normative:hover{background:#8A2519}.ds-btn-normative:focus-visible{outline:none;border:2px solid #1A1A1A}"
+    },
+    {
+      "name": "Ink Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Default filled button for ordinary confirmations.",
+      "html": "<button class=\"ds-btn-ink\">Save</button>",
+      "css": ".ds-btn-ink{font-family:'Source Sans 3',sans-serif;font-size:15px;font-weight:600;height:40px;padding:0 18px;border-radius:6px;background:#1A1A1A;color:#FFFFFF;border:1px solid #1A1A1A;cursor:pointer}.ds-btn-ink:hover{background:#33312E}.ds-btn-ink:focus-visible{outline:none;border:2px solid #9A2A1F}"
+    },
+    {
+      "name": "Outlined Button",
+      "kind": "button",
+      "refersTo": "button-outlined",
+      "description": "Secondary action beside the normative one (Refine again).",
+      "html": "<button class=\"ds-btn-outlined\">Refine again</button>",
+      "css": ".ds-btn-outlined{font-family:'Source Sans 3',sans-serif;font-size:15px;font-weight:600;height:40px;padding:0 18px;border-radius:6px;background:#FFFFFF;color:#1A1A1A;border:1px solid #1A1A1A;cursor:pointer}.ds-btn-outlined:hover{background:rgba(26,26,26,.05)}.ds-btn-outlined:focus-visible{outline:none;border-width:2px}"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Filled paper field with a hairline border and a 2px ink focus ring.",
+      "html": "<input class=\"ds-input\" placeholder=\"Add a task…\">",
+      "css": ".ds-input{font-family:'Source Sans 3',sans-serif;font-size:15px;padding:12px;border-radius:6px;background:#FFFFFF;color:#1A1A1A;border:1px solid #E9E7E3;outline:none}.ds-input::placeholder{color:#5E5B56}.ds-input:focus-visible{border:2px solid #1A1A1A;padding:11px}"
+    },
+    {
+      "name": "Status Chips",
+      "kind": "chip",
+      "refersTo": "status-chip-good",
+      "description": "Compact status tones: active, good, bad, quiet.",
+      "html": "<span class=\"ds-chip ds-chip-active\">Running</span> <span class=\"ds-chip ds-chip-good\">CI passing</span> <span class=\"ds-chip ds-chip-bad\">CI failing</span> <span class=\"ds-chip ds-chip-quiet\">Queued</span>",
+      "css": ".ds-chip{font-family:'Source Sans 3',sans-serif;display:inline-block;font-size:13.5px;font-weight:600;line-height:1.2;padding:2px 6px;border-radius:4px;border:1px solid}.ds-chip-active{background:#1A1A1A;color:#FFFFFF;border-color:#1A1A1A}.ds-chip-good{background:#E4EFE5;color:#2F6B3A;border-color:#E4EFE5}.ds-chip-bad{background:#F5E2DF;color:#9A2A1F;border-color:#F5E2DF}.ds-chip-quiet{background:transparent;color:#5E5B56;border-color:#E9E7E3}"
+    },
+    {
+      "name": "Header Block",
+      "kind": "custom",
+      "description": "Mono statement of what the screen holds, between a 2px and a 1px ink rule.",
+      "html": "<div class=\"ds-head\"><div><div>Repository: acme/mobile-app</div><div>Version 1 · commit 3f9c2ab · OpenCode on studio-mac</div></div><div class=\"ds-head-r\"><div>Status: Ready for review</div><div>Readiness: 72%</div></div></div>",
+      "css": ".ds-head{font-family:'Source Code Pro',monospace;font-variant-numeric:tabular-nums;font-size:12.5px;line-height:1.7;color:#1A1A1A;display:flex;justify-content:space-between;gap:24px;padding:8px 0;border-top:2px solid #1A1A1A;border-bottom:1px solid #1A1A1A}.ds-head-r{text-align:right}"
+    },
+    {
+      "name": "Task Row",
+      "kind": "card",
+      "refersTo": "task-row",
+      "description": "Paper sheet on a side-field lane; ink border on hover, 2px ring on focus.",
+      "html": "<div class=\"ds-lane\"><a href=\"#\" class=\"ds-task\">Retry photo uploads after network loss</a></div>",
+      "css": ".ds-lane{background:#FAF9F7;border-radius:6px;padding:8px;width:288px}.ds-task{font-family:'Source Sans 3',sans-serif;display:block;font-size:15px;font-weight:600;color:#1A1A1A;text-decoration:none;background:#FFFFFF;border:1px solid #E9E7E3;border-radius:6px;padding:12px;transition:border-color .12s}.ds-task:hover{border-color:#1A1A1A}.ds-task:focus-visible{outline:none;border:2px solid #1A1A1A;padding:11px}"
+    },
+    {
+      "name": "Evidence Reference",
+      "kind": "custom",
+      "description": "RFC-style reference to code with a verified or unverified mark.",
+      "html": "<div class=\"ds-ev\"><span>[E1]</span><span>lib/upload/queue.dart:12-40</span><span class=\"ds-ev-ok\">verified</span></div><div class=\"ds-ev\"><span>[E2]</span><span>lib/net/retry.dart:3-9</span><span class=\"ds-ev-no\">unverified</span></div>",
+      "css": ".ds-ev{font-family:'Source Code Pro',monospace;font-variant-numeric:tabular-nums;font-size:14px;color:#1A1A1A;display:flex;gap:12px;padding:6px 0;border-top:1px solid #E9E7E3}.ds-ev:first-child{border-top:none}.ds-ev-ok{color:#2F6B3A}.ds-ev-no{color:#5E5B56;text-decoration:underline dashed #5E5B56}"
+    },
+    {
+      "name": "Normative Keyword",
+      "kind": "custom",
+      "description": "An RFC 2119 keyword the agent wrote, in normative red small caps.",
+      "html": "<p class=\"ds-prose\">Failed uploads <span class=\"ds-kw\">MUST</span> be kept in the on-device queue.</p>",
+      "css": ".ds-prose{font-family:'Source Sans 3',sans-serif;font-size:16px;line-height:1.5;color:#1A1A1A;max-width:680px}.ds-kw{color:#9A2A1F;font-weight:700;font-feature-settings:'c2sc';letter-spacing:.6px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Internet-Draft, Put to Work",
+    "overview": "Every screen reads like a standards document that is being used rather than archived. A screen opens by stating what it holds and what it stands on: a monospaced header block (repository, version, commit, status, readiness) set between a heavy ink rule and a light one. The prose below is plain, set in Source Sans 3 on white paper, separated by hairlines rather than boxes. References to code are written the way an RFC cites a reference: `[E1] path:12-40 verified`.\n\nColour is almost entirely absent. Ink and paper do the work; warm grey hairlines and a faintly warm side field set the structure. One red is normative: it marks the single act that matters on a screen (Approve spec, Refine with AI), the MUST/SHOULD/MAY words the agent itself wrote, and the failures that need you. One quiet green says verified, approved or passing, and nothing else.\n\nThe system refuses the grey issue tracker with an indigo accent, and the warm-paper \"Furrow\" ledger it replaced. Light and dark both ship and follow the system setting. Dark is a warm near-black sheet with the same rules, not an inverted page.",
+    "keyCharacteristics": [
+      "White paper, near-black ink, warm grey hairlines; colour is a signal, never decoration.",
+      "A mono header block between a 2px and a 1px ink rule opens the task, board, home, sign-in and workers screens.",
+      "One normative red per screen; one quiet green for verified states.",
+      "Flat: no elevation at rest, no cards inside cards, 6px corners.",
+      "Source Sans 3 for UI and prose, Source Code Pro for anything you would copy."
+    ],
+    "rules": [
+      {
+        "name": "The One Normative Act Rule",
+        "body": "A screen carries at most one red-filled button, and it is the act the screen exists for. Everything else is ink, outlined, or text.",
+        "section": "colors"
+      },
+      {
+        "name": "The Agent Wrote It Rule",
+        "body": "Normative keywords are coloured only where the agent's own text contains them (`MUST NOT`, `SHALL NOT`, `SHOULD NOT`, `MUST`, `SHALL`, `SHOULD`, `MAY`, `REQUIRED`). The UI never adds a keyword of its own to borrow the red.",
+        "section": "colors"
+      },
+      {
+        "name": "The Green Means Checked Rule",
+        "body": "Green appears only for something verified, approved or passing.",
+        "section": "colors"
+      },
+      {
+        "name": "The Copyable Is Mono Rule",
+        "body": "If a reader might paste it into a terminal or a search box (a path, a commit, a line range, a timestamp, a count), it is set in Source Code Pro with tabular figures. Prose and labels never are.",
+        "section": "typography"
+      },
+      {
+        "name": "The Small Caps Keyword Rule",
+        "body": "Normative keywords render in normative red, bold, with the `c2sc` small-caps feature and 0.6px tracking, as the RFC 2119 convention asks. No other text uses small caps, uppercase or tracking.",
+        "section": "typography"
+      },
+      {
+        "name": "The Header Block Rule",
+        "body": "A screen that has a subject opens with a HeaderBlock: mono lines, 8px vertical padding, a 2px ink rule above and a 1px ink rule below. On the spec it splits into a left column (Repository; Version · commit · refiner on worker) and a right-aligned column (Status, Readiness, Evidence), and stacks below 560px.",
+        "section": "layout"
+      },
+      {
+        "name": "The Only Lifted Thing Rule",
+        "body": "Nothing casts a shadow at rest. A shadow means \"you are moving this\", and disappears when it drops.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** open every screen that has a subject with the HeaderBlock: mono lines between a 2px ink rule and a 1px ink rule.",
+      "**Do** keep one normative-red fill per screen, on the act the screen exists for; give every other action ink, an outline or plain text.",
+      "**Do** set paths, commits, line ranges, ids, dates and counts in Source Code Pro with tabular figures.",
+      "**Do** separate rows with 1px rule-colour hairlines instead of boxing them.",
+      "**Do** use the side field for things that sit beside the page (rail, lanes, run panel) and paper for things on it.",
+      "**Do** read colours and faces through the theme tokens; no literal Color or font family outside the theme file."
+    ],
+    "donts": [
+      "**Don't** colour a keyword the agent did not write, or use the normative red for decoration, links or emphasis.",
+      "**Don't** use green for anything except verified, approved or passing.",
+      "**Don't** cast a shadow at rest or nest a card inside a card.",
+      "**Don't** add section numbers, uppercase labels or tracked type; small caps belong only to normative keywords.",
+      "**Don't** bring back the indigo-accented grey tracker look or the warm-paper ledger this replaced."
+    ]
+  }
+}

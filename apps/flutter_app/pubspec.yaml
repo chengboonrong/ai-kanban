@@ -24,18 +24,16 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  fonts: # Red Hat, SIL Open Font License 1.1 (assets/fonts/OFL.txt)
-    - family: RedHatText
+  fonts: # Source Sans 3 and Source Code Pro (Adobe), SIL Open Font License 1.1 (assets/fonts/OFL.txt)
+    - family: SourceSans3
       fonts:
-        - asset: assets/fonts/RedHatText-Regular.ttf
-        - asset: assets/fonts/RedHatText-Medium.ttf
-          weight: 500
-    - family: RedHatDisplay
-      fonts:
-        - asset: assets/fonts/RedHatDisplay-SemiBold.ttf
+        - asset: assets/fonts/SourceSans3-Regular.ttf
+        - asset: assets/fonts/SourceSans3-Semibold.ttf
           weight: 600
-    - family: RedHatMono
+        - asset: assets/fonts/SourceSans3-Bold.ttf
+          weight: 700
+    - family: SourceCodePro
       fonts:
-        - asset: assets/fonts/RedHatMono-Regular.ttf
-        - asset: assets/fonts/RedHatMono-Medium.ttf
-          weight: 500
+        - asset: assets/fonts/SourceCodePro-Regular.ttf
+        - asset: assets/fonts/SourceCodePro-Semibold.ttf
+          weight: 600

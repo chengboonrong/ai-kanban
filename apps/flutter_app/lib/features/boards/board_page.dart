@@ -132,54 +132,41 @@ class BoardPage extends ConsumerWidget {
     final async = ref.watch(boardProvider(boardId));
     final board = async.value;
     final notifier = ref.read(boardProvider(boardId).notifier);
+    final drafts = ref.watch(outboxProvider).where((d) => d.boardId == boardId);
     final theme = Theme.of(context);
     final t = context.tokens;
 
+    Future<void> connect() async {
+      final repo = await promptText(
+        context,
+        'GitHub repository (owner/name)',
+        initial: board?.repository ?? '',
+        action: 'Connect',
+      );
+      if (repo != null && context.mounted) {
+        await runWithFeedback(context, () => notifier.setRepository(repo));
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(board?.name ?? 'Board', overflow: TextOverflow.ellipsis),
-            if (board?.repository case final repository?)
-              Text(
-                repository,
-                overflow: TextOverflow.ellipsis,
-                style: t.mono(theme.textTheme.labelSmall!),
-              ),
-          ],
-        ),
+        title: Text(board?.name ?? 'Board', overflow: TextOverflow.ellipsis),
         actions: [
           if (board != null)
             PopupMenuButton<String>(
               tooltip: 'Repository',
               icon: const Icon(Icons.link),
               onSelected: (choice) async {
-                if (choice == 'disconnect') {
-                  if (await confirm(
-                        context,
-                        'Disconnect ${board.repository}? New cards won\'t be refined.',
-                        action: 'Disconnect',
-                      ) &&
-                      context.mounted) {
-                    await runWithFeedback(
+                if (choice != 'disconnect') return connect();
+                if (await confirm(
                       context,
-                      () => notifier.setRepository(null),
-                    );
-                  }
-                  return;
-                }
-                final repo = await promptText(
-                  context,
-                  'GitHub repository (owner/name)',
-                  initial: board.repository ?? '',
-                  action: 'Connect',
-                );
-                if (repo != null && context.mounted) {
+                      'Disconnect ${board.repository}? New cards won\'t be refined.',
+                      action: 'Disconnect',
+                    ) &&
+                    context.mounted) {
                   await runWithFeedback(
                     context,
-                    () => notifier.setRepository(repo),
+                    () => notifier.setRepository(null),
                   );
                 }
               },
@@ -219,15 +206,17 @@ class BoardPage extends ConsumerWidget {
       body: board != null
           ? Column(
               children: [
+                _HeaderBlock(
+                  board: board,
+                  drafts: drafts.where((d) => d.error == null).length,
+                  onConnect: connect,
+                ),
                 if (board.offline)
                   const _Notice(
-                    icon: Icons.cloud_off,
+                    icon: Icons.cloud_off_outlined,
                     text: 'Offline: showing the copy saved on this device. New tasks are sent when the connection is back.',
                   ),
-                for (final d
-                    in ref
-                        .watch(outboxProvider)
-                        .where((d) => d.boardId == boardId && d.error != null))
+                for (final d in drafts.where((d) => d.error != null))
                   _Notice(
                     icon: Icons.error_outline,
                     text: 'Couldn\'t save "${d.title}": ${d.error}',
@@ -258,6 +247,99 @@ class BoardPage extends ConsumerWidget {
   }
 }
 
+/// The draft's header block: the repository the board refines against, and where its cards stand.
+class _HeaderBlock extends StatelessWidget {
+  const _HeaderBlock({
+    required this.board,
+    required this.drafts,
+    required this.onConnect,
+  });
+  final Board board;
+  final int drafts;
+  final VoidCallback onConnect;
+
+  static const _states = {
+    'ready': 'Ready for review',
+    'running': 'Refining',
+    'queued': 'Waiting',
+    'approved': 'Approved',
+    'failed': 'Failed',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final tasks = [for (final c in board.columns) ...c.tasks];
+    final counts = [
+      for (final MapEntry(:key, :value) in _states.entries)
+        if (tasks.where((task) => task.refinement == key).length case final n
+            when n > 0)
+          '$value: $n',
+    ];
+    return _HeaderRules(
+      left: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('Repository: '),
+          if (board.repository case final repository?)
+            Flexible(child: Text(repository, overflow: TextOverflow.ellipsis))
+          else ...[
+            Flexible(
+              child: Text(
+                'not connected',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: t.muted),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+              onPressed: onConnect,
+              child: const Text('Connect'),
+            ),
+          ],
+        ],
+      ),
+      right: Text(
+        counts.isEmpty ? 'Tasks: ${tasks.length + drafts}' : counts.join(' · '),
+      ),
+    );
+  }
+}
+
+/// The header block's frame: a 2px ink rule above, a 1px ink rule below, mono lines between,
+/// [left] at the start and [right] at the end (the next line down when they don't fit side by side).
+class _HeaderRules extends StatelessWidget {
+  const _HeaderRules({required this.left, required this.right});
+  final Widget left, right;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          border: Border(top: t.headRule, bottom: t.inkRule),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: DefaultTextStyle.merge(
+            style: t.mono(Theme.of(context).textTheme.bodyMedium!),
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 24,
+              children: [left, right],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Notice extends StatelessWidget {
   const _Notice({required this.icon, required this.text, this.action});
   final IconData icon;
@@ -280,30 +362,32 @@ class _Notice extends StatelessWidget {
   }
 }
 
+/// Lane width: on phones one lane nearly fills the screen and its neighbour peeks in; elsewhere fixed.
+double _laneWidth(BoxConstraints constraints) =>
+    constraints.maxWidth < 600 ? constraints.maxWidth * 0.85 : 288.0;
+
+const _laneGap = 16.0;
+const _lanePadding = EdgeInsets.fromLTRB(16, 16, 0, 16);
+
 class _BoardView extends StatelessWidget {
   const _BoardView({required this.board, required this.notifier});
   final Board board;
   final BoardNotifier notifier;
-
-  static const _gap = 20.0;
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Phones: one column nearly fills the screen and its neighbour peeks in. Desktop/web: fixed-width lanes.
-        final width = constraints.maxWidth < 600
-            ? constraints.maxWidth * 0.85
-            : 288.0;
+        final width = _laneWidth(constraints);
         return ReorderableListView.builder(
           scrollDirection: Axis.horizontal,
           buildDefaultDragHandles: false,
-          padding: const EdgeInsets.fromLTRB(16, 16, 0, 0),
+          padding: _lanePadding,
           itemCount: board.columns.length,
           onReorderItem: (from, to) =>
               runWithFeedback(context, () => notifier.moveColumn(from, to)),
-          // A lifted lane: the page ground under it and one soft shadow, no animated elevation.
+          // A lifted lane: one soft shadow, no animated elevation.
           proxyDecorator: (child, _, _) => Material(
             color: t.paper,
             elevation: 3,
@@ -313,14 +397,14 @@ class _BoardView extends StatelessWidget {
           ),
           itemBuilder: (context, i) => Padding(
             key: ValueKey(board.columns[i].id),
-            padding: const EdgeInsets.only(right: _gap),
+            padding: const EdgeInsets.only(right: _laneGap),
             child: SizedBox(
               width: width,
               child: _ColumnView(
                 board: board,
                 index: i,
                 notifier: notifier,
-                cardWidth: width,
+                cardWidth: width - 16,
               ),
             ),
           ),
@@ -330,61 +414,67 @@ class _BoardView extends StatelessWidget {
   }
 }
 
-/// Loading: the board's shape at rest (lanes, ink rules, rows), nothing moving.
+/// Loading: the board's shape at rest (header block, lanes, rows) in rule-coloured bars, nothing moving.
 class _BoardSkeleton extends StatelessWidget {
   const _BoardSkeleton();
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    Widget block(double height, double? width) => Container(
+    Widget bar(double height, [double? width]) => Container(
       height: height,
       width: width,
       decoration: BoxDecoration(
-        color: t.paper3,
+        color: t.rule,
         borderRadius: BorderRadius.circular(Tokens.radiusControl),
       ),
     );
     return ExcludeSemantics(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.maxWidth < 600
-              ? constraints.maxWidth * 0.85
-              : 288.0;
-          return ListView(
-            scrollDirection: Axis.horizontal,
-            physics: const NeverScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 16, 0, 0),
-            children: [
-              for (final rows in const [3, 2, 3, 2])
-                Padding(
-                  padding: const EdgeInsets.only(right: _BoardView._gap),
-                  child: SizedBox(
-                    width: width,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          height: 44,
-                          alignment: Alignment.centerLeft,
-                          padding: const EdgeInsets.only(left: 32),
-                          decoration: BoxDecoration(
-                            border: Border(bottom: t.inkRule),
+      child: Column(
+        children: [
+          _HeaderRules(left: bar(12, 200), right: bar(12, 160)),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) => ListView(
+                scrollDirection: Axis.horizontal,
+                physics: const NeverScrollableScrollPhysics(),
+                padding: _lanePadding,
+                children: [
+                  for (final rows in const [3, 2, 3, 2])
+                    Container(
+                      width: _laneWidth(constraints),
+                      margin: const EdgeInsets.only(right: _laneGap),
+                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                      decoration: BoxDecoration(
+                        color: t.paper3,
+                        borderRadius: BorderRadius.circular(Tokens.radiusCard),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            height: 48,
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 24),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: bar(12, 96),
+                              ),
+                            ),
                           ),
-                          child: block(12, 96),
-                        ),
-                        const SizedBox(height: 12),
-                        for (var i = 0; i < rows; i++) ...[
-                          if (i > 0) const SizedBox(height: 8),
-                          block(56, null),
+                          for (var i = 0; i < rows; i++)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: bar(56),
+                            ),
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-            ],
-          );
-        },
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -415,176 +505,165 @@ class _ColumnView extends ConsumerWidget {
       () => notifier.moveTask(task, column.id, toIndex),
     );
 
-    // The lane is an open, full-height drop target: an invisible Card (tests look the lane up by it)
-    // that sinks to paper3 only while a card hovers over it.
+    // The lane is a paper3 side field and one full-height drop target (tests look the lane up by this
+    // Card); it takes a faint red tint only while a card hovers over its open ground.
     return DragTarget<Task>(
       onAcceptWithDetails: (d) => move(d.data, column.tasks.length),
       builder: (context, candidates, _) => Card(
-        margin: EdgeInsets.zero,
-        elevation: 0,
-        color: candidates.isEmpty ? Colors.transparent : t.paper3,
+        color: candidates.isEmpty
+            ? t.paper3
+            : t.accentSoft.withValues(alpha: 0.5),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(Tokens.radiusCard),
         ),
         child: Column(
           children: [
-            DecoratedBox(
-              decoration: BoxDecoration(border: Border(bottom: t.inkRule)),
-              child: SizedBox(
-                height: 44,
-                child: Row(
-                  children: [
-                    ReorderableDragStartListener(
-                      index: index,
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.grab,
-                        child: SizedBox(
-                          width: 32,
-                          height: 44,
-                          child: Icon(
-                            Icons.drag_indicator,
-                            size: 18,
-                            color: t.muted,
-                          ),
+            SizedBox(
+              height: 48,
+              child: Row(
+                children: [
+                  ReorderableDragStartListener(
+                    index: index,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.grab,
+                      child: SizedBox(
+                        width: 32,
+                        height: 48,
+                        child: Icon(
+                          Icons.drag_indicator,
+                          size: 18,
+                          color: t.muted,
                         ),
                       ),
                     ),
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              column.name,
-                              style: theme.textTheme.titleSmall,
-                              overflow: TextOverflow.ellipsis,
+                  ),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            column.name,
+                            style: theme.textTheme.titleSmall!.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${column.tasks.length + pending.length}',
+                          style: t.mono(
+                            theme.textTheme.labelMedium!.copyWith(
+                              color: t.muted,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${column.tasks.length + pending.length}',
-                            style: t.mono(
-                              theme.textTheme.labelMedium!.copyWith(
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_horiz),
+                    iconColor: t.muted,
+                    onSelected: (choice) async {
+                      if (choice == 'rename') {
+                        final name = await promptText(
+                          context,
+                          'Rename column',
+                          initial: column.name,
+                        );
+                        if (name != null && context.mounted) {
+                          await runWithFeedback(
+                            context,
+                            () => notifier.renameColumn(column.id, name),
+                          );
+                        }
+                      } else if (await confirm(
+                            context,
+                            'Delete column "${column.name}"?',
+                          ) &&
+                          context.mounted) {
+                        await runWithFeedback(
+                          context,
+                          () => notifier.deleteColumn(column.id),
+                        );
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'rename', child: Text('Rename')),
+                      PopupMenuItem(value: 'delete', child: Text('Delete')),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            // Fills the lane so the whole lane takes drops. Each card owns the 8px gap above it, where
+            // a 2px ink line marks the drop point; the capture field follows the last card.
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                children: [
+                  for (final (i, task) in column.tasks.indexed)
+                    DragTarget<Task>(
+                      onAcceptWithDetails: (d) {
+                        if (d.data.id == task.id) {
+                          return; // dropped back on itself: stay put
+                        }
+                        // Drop before this card; positions are counted without the dragged card.
+                        final from = column.tasks.indexWhere(
+                          (t) => t.id == d.data.id,
+                        );
+                        move(d.data, from != -1 && from < i ? i - 1 : i);
+                      },
+                      builder: (context, over, _) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Divider(
+                            height: 8,
+                            thickness: 2,
+                            color: over.any((t) => t?.id != task.id)
+                                ? t.ink
+                                : Colors.transparent,
+                          ),
+                          _TaskCard(board: board, task: task, width: cardWidth),
+                        ],
+                      ),
+                    ),
+                  for (final d in pending)
+                    Container(
+                      margin: const EdgeInsets.only(top: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        border: Border.fromBorderSide(t.hairline),
+                        borderRadius: BorderRadius.circular(
+                          Tokens.radiusControl,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              d.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyMedium!.copyWith(
+                                fontWeight: FontWeight.w600,
                                 color: t.muted,
                               ),
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          Tooltip(
+                            message: 'Saved on this device, waiting to sync',
+                            child: Icon(
+                              Icons.cloud_upload_outlined,
+                              size: 16,
+                              color: t.muted,
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                    PopupMenuButton<String>(
-                      icon: const Icon(Icons.more_horiz),
-                      iconColor: t.muted,
-                      onSelected: (choice) async {
-                        if (choice == 'rename') {
-                          final name = await promptText(
-                            context,
-                            'Rename column',
-                            initial: column.name,
-                          );
-                          if (name != null && context.mounted) {
-                            await runWithFeedback(
-                              context,
-                              () => notifier.renameColumn(column.id, name),
-                            );
-                          }
-                        } else if (await confirm(
-                              context,
-                              'Delete column "${column.name}"?',
-                            ) &&
-                            context.mounted) {
-                          await runWithFeedback(
-                            context,
-                            () => notifier.deleteColumn(column.id),
-                          );
-                        }
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'rename', child: Text('Rename')),
-                        PopupMenuItem(value: 'delete', child: Text('Delete')),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            // Fills the lane so the whole lane takes drops. The tasks sit on one ledger sheet, rows split by
-            // hairlines; the capture field follows the sheet. An empty column has no sheet at all.
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.only(top: 12, bottom: 16),
-                children: [
-                  if (column.tasks.isNotEmpty || pending.isNotEmpty) ...[
-                    Card(
-                      clipBehavior: Clip.antiAlias,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          for (final (i, task) in column.tasks.indexed)
-                            DragTarget<Task>(
-                              onAcceptWithDetails: (d) {
-                                if (d.data.id == task.id) {
-                                  return; // dropped back on itself: stay put
-                                }
-                                // Drop before this card; positions are counted without the dragged card.
-                                final from = column.tasks.indexWhere(
-                                  (t) => t.id == d.data.id,
-                                );
-                                move(
-                                  d.data,
-                                  from != -1 && from < i ? i - 1 : i,
-                                );
-                              },
-                              builder: (context, over, _) => Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  if (i > 0) const Divider(),
-                                  if (over.any((t) => t?.id != task.id))
-                                    Divider(
-                                      height: 2,
-                                      thickness: 2,
-                                      color: t.accent,
-                                    ),
-                                  _TaskCard(
-                                    board: board,
-                                    task: task,
-                                    width: cardWidth,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          for (final (i, d) in pending.indexed) ...[
-                            if (i > 0 || column.tasks.isNotEmpty)
-                              const Divider(),
-                            Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      d.title,
-                                      style: theme.textTheme.titleMedium!
-                                          .copyWith(color: t.muted),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Tooltip(
-                                    message:
-                                        'Saved on this device, waiting to sync',
-                                    child: Icon(
-                                      Icons.cloud_upload_outlined,
-                                      size: 16,
-                                      color: t.muted,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
+                  const SizedBox(height: 8),
                   _AddTaskField(boardId: board.id, columnId: column.id),
                 ],
               ),
@@ -611,7 +690,7 @@ class _TaskCard extends ConsumerStatefulWidget {
 }
 
 class _TaskCardState extends ConsumerState<_TaskCard> {
-  bool _focused = false;
+  bool _focused = false, _hovered = false;
 
   @override
   Widget build(BuildContext context) {
@@ -620,84 +699,88 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
     final t = context.tokens;
     final board = widget.board;
     final viewer = ref.watch(authProvider)?.user.login;
-    final queued = task.refinement == 'queued';
-    final status = switch (task.refinement) {
-      'queued' => (
-        Icons.hourglass_empty,
-        board.waiting?.describe(viewer: viewer, repository: board.repository) ??
-            'Waiting for a worker',
-      ),
-      'running' => (Icons.autorenew, 'Refining…'),
-      'ready' => (Icons.rate_review_outlined, 'Spec ready for review'),
-      'approved' => (Icons.verified_outlined, 'Spec approved'),
-      'failed' => (Icons.error_outline, 'Refinement failed'),
+    final chip = switch (task.refinement) {
+      'running' => ('Refining…', StatusTone.quiet),
+      'ready' => ('Spec ready for review', StatusTone.neutral),
+      'approved' => ('Spec approved', StatusTone.good),
+      'failed' => ('Refinement failed', StatusTone.bad),
       _ => null,
     };
-    final radius = BorderRadius.circular(Tokens.radiusCard);
     final body = Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(task.title, style: theme.textTheme.titleMedium),
-          if (status != null || task.github != null)
-            DefaultTextStyle.merge(
-              style: theme.textTheme.labelSmall,
-              child: IconTheme.merge(
-                data: IconThemeData(size: 14, color: t.muted),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (status != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Row(
-                          children: [
-                            Icon(
-                              status.$1,
-                              color: task.refinement == 'failed'
-                                  ? t.danger
-                                  : null,
-                            ),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                status.$2,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (queued &&
-                                (board.waiting?.mine(viewer) ?? false))
-                              const WorkersButton(),
-                          ],
-                        ),
-                      ),
-                    if (task.github case final github?)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: GitHubBadge(github: github),
-                      ),
-                  ],
-                ),
+          Text(
+            task.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium!.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          // Queued: why it waits, in one quiet line, and the way to the Workers page when it's yours to fix.
+          if (task.refinement == 'queued')
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.hourglass_empty, size: 14, color: t.muted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      board.waiting?.describe(
+                            viewer: viewer,
+                            repository: board.repository,
+                          ) ??
+                          'Waiting for a worker',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                  if (board.waiting?.mine(viewer) ?? false)
+                    const WorkersButton(),
+                ],
               ),
+            ),
+          if (chip case (final label, final tone))
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: StatusChip(label: label, tone: tone),
+            ),
+          if (task.github case final github?)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: GitHubBadge(github: github),
             ),
         ],
       ),
     );
-    // A row of the lane's sheet: the ink overlay on hover, a 2px focus ring inside the row.
-    final card = InkWell(
-      onTap: () => context.go('/boards/${board.id}/tasks/${task.id}'),
-      onFocusChange: (v) => setState(() => _focused = v),
-      child: DecoratedBox(
-        position: DecorationPosition.foreground,
-        decoration: BoxDecoration(
-          border: _focused ? Border.all(color: t.focus, width: 2) : null,
-        ),
+    final radius = BorderRadius.circular(Tokens.radiusControl);
+    Widget sheet(BorderSide side, Widget child) => Material(
+      color: t.paper2, // in front of the lane's paper3 field, in both themes
+      animationDuration: Tokens.durMicro,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: radius, side: side),
+      child: child,
+    );
+    // A white row on the lane: the border goes ink on hover; keyboard focus is the theme's 2px ring, alone.
+    final card = sheet(
+      _focused
+          ? BorderSide(color: t.focus, width: 2)
+          : _hovered
+          ? t.inkRule
+          : t.hairline,
+      InkWell(
+        onTap: () => context.go('/boards/${board.id}/tasks/${task.id}'),
+        onFocusChange: (v) => setState(() => _focused = v),
+        onHover: (v) => setState(() => _hovered = v),
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
         child: body,
       ),
     );
-    // The one lifted thing on the board: the card in hand.
+    // The one lifted thing on the board: the card in hand, at full strength, on a soft offset shadow.
     final feedback = Material(
       type: MaterialType.transparency,
       child: DecoratedBox(
@@ -711,15 +794,15 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
             ),
           ],
         ),
-        child: SizedBox(
-          width: widget.width,
-          child: Card(child: body),
-        ),
+        child: SizedBox(width: widget.width, child: sheet(t.hairline, body)),
       ),
     );
-    // The slot it left: a sunken paper3 row the same size as the task.
-    final placeholder = ColoredBox(
-      color: t.paper3,
+    // The slot it left: an empty outline the same size as the task.
+    final placeholder = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        border: Border.fromBorderSide(t.hairline),
+      ),
       child: Opacity(opacity: 0, child: body),
     );
     // Touch devices need a long press so vertical scrolling still works; mouse users drag directly.
@@ -782,7 +865,7 @@ class _AddTaskFieldState extends ConsumerState<_AddTaskField> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    // A quiet well rather than a raised sheet; the theme supplies the hairline and the 2px focus ring.
+    // A quiet well at the lane's foot; the theme supplies the hairline and the 2px focus ring.
     return TextField(
       controller: _controller,
       focusNode: _focus,

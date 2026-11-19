@@ -95,78 +95,73 @@ class WorkersPage extends ConsumerWidget {
         ],
       ),
       body: switch (workers) {
-        AsyncValue(:final value?) when value.isEmpty => ListView(
-          padding: EdgeInsets.fromLTRB(side, 24, side, 24),
-          children: [
-            Text(
-              'No workers yet. Connect the machine that has your checkouts and it refines your cards.',
-              style: quiet,
-            ),
-          ],
-        ),
         AsyncValue(:final value?) => ListView(
           padding: EdgeInsets.fromLTRB(side, 24, side, 48),
           children: [
-            DecoratedBox(
-              decoration: BoxDecoration(border: Border(top: t.inkRule)),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final w in value)
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        border: Border(bottom: t.hairline),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: Row(
+            HeaderBlock(
+              lines: [
+                'Workers: ${value.length} · '
+                    'Online: ${value.where((w) => w.state == 'online').length} · '
+                    'Busy: ${value.where((w) => w.state == 'busy').length}',
+              ],
+            ),
+            if (value.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 24),
+                child: Text(
+                  'No workers yet. Connect the machine that has your checkouts and it refines your cards.',
+                  style: quiet,
+                ),
+              ),
+            for (final w in value)
+              DecoratedBox(
+                decoration: BoxDecoration(border: Border(bottom: t.hairline)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Padding(
-                              padding: const EdgeInsets.only(top: 2, right: 12),
-                              child: Icon(
-                                Icons.computer_outlined,
-                                size: 20,
-                                color: t.muted,
-                              ),
-                            ),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    w.name,
-                                    style: theme.textTheme.titleMedium,
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 4,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Text(
+                                  w.name,
+                                  style: t.mono(
+                                    theme.textTheme.bodyLarge!.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
-                                  const SizedBox(height: 6),
-                                  _StateChip(worker: w),
-                                  const SizedBox(height: 6),
-                                  w.repositories.isEmpty
-                                      ? Text(
-                                          'No repositories allowed yet',
-                                          style: theme.textTheme.bodySmall,
-                                        )
-                                      : Text(
-                                          w.repositories.join(', '),
-                                          style: t.mono(
-                                            theme.textTheme.bodySmall!,
-                                          ),
-                                        ),
-                                ],
-                              ),
+                                ),
+                                _StateChip(worker: w),
+                              ],
                             ),
-                            IconButton(
-                              tooltip: 'Remove ${w.name}',
-                              icon: const Icon(Icons.delete_outline),
-                              onPressed: () => _remove(context, ref, w),
+                            const SizedBox(height: 4),
+                            Text(
+                              w.repositories.isEmpty
+                                  ? 'No repositories allowed yet'
+                                  : w.repositories.join(', '),
+                              style: w.repositories.isEmpty
+                                  ? theme.textTheme.bodySmall
+                                  : t.mono(theme.textTheme.bodySmall!),
                             ),
                           ],
                         ),
                       ),
-                    ),
-                ],
+                      const SizedBox(width: 8),
+                      IconButton(
+                        tooltip: 'Remove ${w.name}',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () => _remove(context, ref, w),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
           ],
         ),
         AsyncValue(:final error?) => ListView(
@@ -176,7 +171,7 @@ class WorkersPage extends ConsumerWidget {
               errorMessage(error),
               style: theme.textTheme.bodyMedium?.copyWith(color: t.danger),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             Align(
               alignment: Alignment.centerLeft,
               child: OutlinedButton(
@@ -238,58 +233,80 @@ class _PairingDialogState extends State<PairingDialog> {
     final theme = Theme.of(context);
     final code = widget.code;
     final command = connectCommand(code);
+    final t = context.tokens;
     return AlertDialog(
       title: const Text('Connect a worker'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'On the machine that has your checkouts, run this in services/worker:',
-          ),
-          const SizedBox(height: 12),
-          Material(
-            color: context.tokens.paper3,
-            borderRadius: BorderRadius.circular(Tokens.radiusControl),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: SelectableText(
-                      command,
-                      style: context.tokens.mono(theme.textTheme.bodyMedium!),
-                    ),
-                  ),
-                ),
-                TextButton.icon(
-                  icon: Icon(_copied == null ? Icons.copy : Icons.check),
-                  label: Text(_copied == null ? 'Copy' : 'Copied'),
-                  onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: command));
-                    if (!mounted) return;
-                    _copied?.cancel();
-                    setState(
-                      () => _copied = Timer(
-                        const Duration(seconds: 2),
-                        () => setState(() => _copied = null),
-                      ),
-                    );
-                  },
-                ),
-              ],
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'On the machine that has your checkouts, run this in services/worker:',
             ),
-          ),
-          const SizedBox(height: 12),
-          SelectableText(
-            code,
-            style: context.tokens.mono(theme.textTheme.headlineSmall!),
-          ),
-          Text(
-            'Works once. Expires at ${TimeOfDay.fromDateTime(widget.expiresAt).format(context)}.',
-            style: theme.textTheme.bodySmall,
-          ),
-        ],
+            const SizedBox(height: 12),
+            // The command's well: the side field with a hairline, so it reads as a block on the white sheet.
+            Material(
+              color: t.paper3,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(Tokens.radiusControl),
+                side: t.hairline,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: SelectableText(
+                          command,
+                          style: t.mono(theme.textTheme.bodyMedium!),
+                        ),
+                      ),
+                    ),
+                    TextButton.icon(
+                      icon: Icon(
+                        _copied == null
+                            ? Icons.content_copy_outlined
+                            : Icons.check,
+                        size: 18,
+                      ),
+                      label: Text(_copied == null ? 'Copy' : 'Copied'),
+                      onPressed: () async {
+                        await Clipboard.setData(ClipboardData(text: command));
+                        if (!mounted) return;
+                        _copied?.cancel();
+                        setState(
+                          () => _copied = Timer(
+                            const Duration(seconds: 2),
+                            () => setState(() => _copied = null),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            SelectableText(
+              code,
+              style: t.mono(
+                theme.textTheme.headlineMedium!.copyWith(
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Works once. Expires at ${TimeOfDay.fromDateTime(widget.expiresAt).format(context)}.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+        ),
       ),
       actions: [
         FilledButton(

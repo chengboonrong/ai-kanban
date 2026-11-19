@@ -105,71 +105,69 @@ class HomePage extends ConsumerWidget {
         ],
       ),
       body: switch (workspaces) {
-        AsyncValue(:final value?) when value.items.isEmpty => ListView(
-          padding: EdgeInsets.fromLTRB(side, 24, side, 24),
-          children: [Text('Create a workspace to get started.', style: quiet)],
-        ),
         AsyncValue(:final value?) => ListView(
-          padding: EdgeInsets.fromLTRB(side, 16, side, 48),
+          padding: EdgeInsets.fromLTRB(side, 24, side, 48),
           children: [
+            HeaderBlock(
+              lines: [
+                'Workspaces: ${value.items.length} · '
+                    'Boards: ${value.items.fold(0, (n, ws) => n + ws.boards.length)}',
+              ],
+            ),
             if (value.offline)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.cloud_off),
-                title: Text(
-                  'Offline: showing the copy saved on this device.',
-                  style: quiet,
-                ),
-              ),
-            for (final ws in value.items)
               Padding(
-                padding: const EdgeInsets.only(top: 16, bottom: 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                padding: const EdgeInsets.only(top: 12),
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            ws.name,
-                            style: theme.textTheme.titleLarge,
-                          ),
-                        ),
-                        TextButton.icon(
-                          onPressed: () => newBoard(ws),
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('New board'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    DecoratedBox(
-                      decoration: BoxDecoration(border: Border(top: t.inkRule)),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (ws.boards.isEmpty)
-                            _Ruled(
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 14,
-                                ),
-                                child: Text('No boards yet.', style: quiet),
-                              ),
-                            ),
-                          for (final b in ws.boards)
-                            _Ruled(
-                              child: _BoardRow(
-                                name: b.name,
-                                onTap: () => context.go('/boards/${b.id}'),
-                              ),
-                            ),
-                        ],
+                    Icon(Icons.cloud_off_outlined, size: 18, color: t.muted),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Offline: showing the copy saved on this device.',
+                        style: quiet,
                       ),
                     ),
                   ],
                 ),
               ),
+            if (value.items.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 24),
+                child: Text('Create a workspace to get started.', style: quiet),
+              ),
+            for (final ws in value.items) ...[
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(ws.name, style: theme.textTheme.titleMedium),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => newBoard(ws),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('New board'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              if (ws.boards.isEmpty)
+                _Ruled(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 12,
+                    ),
+                    child: Text('No boards yet.', style: quiet),
+                  ),
+                ),
+              for (final b in ws.boards)
+                _Ruled(
+                  child: _BoardRow(
+                    name: b.name,
+                    onTap: () => context.go('/boards/${b.id}'),
+                  ),
+                ),
+            ],
           ],
         ),
         AsyncValue(:final error?) => ListView(
@@ -178,6 +176,14 @@ class HomePage extends ConsumerWidget {
             Text(
               errorMessage(error),
               style: theme.textTheme.bodyMedium?.copyWith(color: t.danger),
+            ),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton(
+                onPressed: () => ref.invalidate(workspacesProvider),
+                child: const Text('Retry'),
+              ),
             ),
           ],
         ),
@@ -190,19 +196,20 @@ class HomePage extends ConsumerWidget {
   }
 }
 
-/// One line of the ledger: a hairline under it.
+/// One line of the ledger: a hairline above it, so the heading's first row is ruled off too.
 class _Ruled extends StatelessWidget {
   const _Ruled({required this.child});
   final Widget child;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(border: Border(bottom: context.tokens.hairline)),
+    decoration: BoxDecoration(border: Border(top: context.tokens.hairline)),
     child: child,
   );
 }
 
-/// A full-width board row. A TextButton so hover, press and the 2px focus ring come from the theme.
+/// A full-width board row: square so its hover tint sits flush between the hairlines. A TextButton so press and
+/// the 2px focus ring come from the theme.
 class _BoardRow extends StatelessWidget {
   const _BoardRow({required this.name, required this.onTap});
   final String name;
@@ -211,19 +218,34 @@ class _BoardRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return TextButton.icon(
+    final text = Theme.of(context).textTheme;
+    return TextButton(
       onPressed: onTap,
-      style: TextButton.styleFrom(
-        alignment: Alignment.centerLeft,
-        minimumSize: const Size.fromHeight(48),
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        iconColor: t.muted,
-        foregroundColor: t.ink,
-        textStyle: Theme.of(context).textTheme.titleMedium,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      style:
+          TextButton.styleFrom(
+            alignment: Alignment.centerLeft,
+            minimumSize: const Size.fromHeight(48),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            foregroundColor: t.ink,
+            textStyle: text.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+            shape: const RoundedRectangleBorder(),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ).copyWith(
+            overlayColor: WidgetStateProperty.resolveWith(
+              (s) => s.contains(WidgetState.pressed)
+                  ? t.rule
+                  : s.contains(WidgetState.hovered)
+                  ? t.paper3
+                  : null,
+            ),
+          ),
+      child: Row(
+        children: [
+          Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
+          const SizedBox(width: 8),
+          Icon(Icons.chevron_right, size: 20, color: t.muted),
+        ],
       ),
-      icon: const Icon(Icons.view_kanban_outlined, size: 20),
-      label: Text(name, overflow: TextOverflow.ellipsis),
     );
   }
 }

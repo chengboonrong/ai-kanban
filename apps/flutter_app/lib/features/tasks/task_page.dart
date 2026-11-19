@@ -22,8 +22,29 @@ class TaskPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final detail = ref.watch(taskProvider(taskId));
     final board = ref.watch(boardProvider(boardId)).value;
+    final theme = Theme.of(context);
+    final t = context.tokens;
     return Scaffold(
-      appBar: AppBar(title: const Text('Task')),
+      appBar: AppBar(
+        title: board == null
+            ? const Text('Task')
+            : Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(text: board.name),
+                    if (board.repository case final repository?)
+                      TextSpan(
+                        text: ' · $repository',
+                        style: t
+                            .mono(theme.textTheme.bodyMedium!)
+                            .copyWith(color: t.muted),
+                      ),
+                  ],
+                ),
+                style: theme.textTheme.titleMedium,
+                overflow: TextOverflow.ellipsis,
+              ),
+      ),
       body: switch (detail) {
         AsyncValue(:final value?) when board != null => _TaskEditor(
           key: ValueKey(taskId),
@@ -107,104 +128,248 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final t = context.tokens;
-    final form = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          controller: _title,
-          decoration: const InputDecoration(labelText: 'Title'),
-        ),
-        const SizedBox(height: 16),
-        DropdownButtonFormField<String>(
-          key: ValueKey(task.columnId),
-          initialValue: task.columnId,
-          decoration: const InputDecoration(labelText: 'Column'),
-          items: [
-            for (final c in widget.columns)
-              DropdownMenuItem(value: c.id, child: Text(c.name)),
-          ],
-          onChanged: (id) =>
-              id == null || id == task.columnId ? null : _move(id),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _description,
-          minLines: 6,
-          maxLines: 20,
-          decoration: const InputDecoration(
-            labelText: 'Description',
-            alignLabelWithHint: true,
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            FilledButton(onPressed: _save, child: const Text('Save')),
-            const Spacer(),
-            TextButton.icon(
-              onPressed: _delete,
-              style: TextButton.styleFrom(foregroundColor: t.danger),
-              icon: const Icon(Icons.delete_outline),
-              label: const Text('Delete'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 32),
-        RefinementPanel(
-          boardId: widget.boardId,
-          taskId: task.id,
-          repository: widget.repository,
-        ),
-        GitHubPanel(boardId: widget.boardId, taskId: task.id),
-      ],
+    final quiet = TextButton.styleFrom(
+      foregroundColor: t.ink2,
+      minimumSize: const Size(0, 32),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
     );
-    final activity = _ActivityList(activity: widget.detail.activity);
+    final column = widget.columns
+        .where((c) => c.id == task.columnId)
+        .firstOrNull;
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth >= 840) {
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: Align(
-                    alignment: Alignment.topLeft,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 960),
-                      child: form,
+        final wide = constraints.maxWidth >= _wide;
+        final gutter = wide ? 48.0 : 16.0;
+        // The spec column: capped, left-aligned, the same gutter for the document and its pinned bar.
+        Widget measured(Widget child, {EdgeInsets? padding}) => Align(
+          alignment: Alignment.topLeft,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 900),
+            child: Padding(
+              padding: padding ?? EdgeInsets.symmetric(horizontal: gutter),
+              child: child,
+            ),
+          ),
+        );
+        final doc = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  // Pulled left by its own padding so the title's first letter sits on the column edge.
+                  child: Transform.translate(
+                    offset: const Offset(-12, 0),
+                    child: Semantics(
+                      label: 'Title',
+                      child: TextField(
+                        controller: _title,
+                        maxLines: null,
+                        style: MediaQuery.sizeOf(context).width < 600
+                            ? theme.textTheme.headlineSmall
+                            : theme.textTheme.displaySmall,
+                        decoration: InputDecoration(
+                          hintText: 'Title',
+                          fillColor: t.paper,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(
+                              Tokens.radiusControl,
+                            ),
+                            borderSide: const BorderSide(
+                              color: Colors.transparent,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _ColumnTag(
+                    name: column?.name ?? '',
+                    columns: widget.columns,
+                    current: task.columnId,
+                    onMove: _move,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            // The brief: one muted line under the title, editable in place like it.
+            Transform.translate(
+              offset: const Offset(-12, 0),
+              child: Semantics(
+                label: 'Description',
+                child: TextField(
+                  controller: _description,
+                  minLines: 1,
+                  maxLines: 20,
+                  style: theme.textTheme.bodyLarge?.copyWith(color: t.muted),
+                  decoration: InputDecoration(
+                    hintText: 'Description',
+                    fillColor: t.paper,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(Tokens.radiusControl),
+                      borderSide: const BorderSide(color: Colors.transparent),
                     ),
                   ),
                 ),
               ),
-              const VerticalDivider(width: 1),
-              SizedBox(
-                width: 340,
-                child: ColoredBox(
-                  color: t.paper3,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(24),
-                    child: activity,
+            ),
+            const SizedBox(height: 4),
+            // Save at the column edge, the destructive Delete at the far end; both quiet.
+            Transform.translate(
+              offset: const Offset(-8, 0),
+              child: Row(
+                children: [
+                  TextButton(
+                    onPressed: _save,
+                    style: quiet,
+                    child: const Text('Save'),
                   ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _delete,
+                    style: quiet,
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    label: const Text('Delete'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            RefinementPanel(
+              boardId: widget.boardId,
+              taskId: task.id,
+              repository: widget.repository,
+            ),
+            GitHubPanel(boardId: widget.boardId, taskId: task.id),
+            if (!wide) ...[
+              const SizedBox(height: 48),
+              _ActivityList(activity: widget.detail.activity, ground: t.paper),
+            ],
+          ],
+        );
+        final main = Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.symmetric(vertical: wide ? 32 : 24),
+                child: measured(doc),
+              ),
+            ),
+            measured(
+              RefinementBar(
+                boardId: widget.boardId,
+                taskId: task.id,
+                repository: widget.repository,
+                padding: EdgeInsets.symmetric(horizontal: gutter, vertical: 12),
+              ),
+              padding: EdgeInsets.zero,
+            ),
+          ],
+        );
+        if (!wide) return main;
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: main),
+            Container(
+              width: 360,
+              decoration: BoxDecoration(
+                color: t.paper3,
+                border: Border(left: t.hairline),
+              ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(32, 32, 32, 24),
+                child: _ActivityList(
+                  activity: widget.detail.activity,
+                  ground: t.paper3,
                 ),
               ),
-            ],
-          );
-        }
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [form, const SizedBox(height: 32), activity],
+            ),
+          ],
         );
       },
     );
   }
 }
 
+/// Wide enough for the spec column beside the 360px activity rail.
+const _wide = 1100.0;
+
+/// The task's column as a small ink-ruled tag; opening it moves the task to another column.
+class _ColumnTag extends StatelessWidget {
+  const _ColumnTag({
+    required this.name,
+    required this.columns,
+    required this.current,
+    required this.onMove,
+  });
+  final String name, current;
+  final List<BoardColumn> columns;
+  final ValueChanged<String> onMove;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return MenuAnchor(
+      menuChildren: [
+        for (final c in columns)
+          MenuItemButton(
+            onPressed: c.id == current ? null : () => onMove(c.id),
+            child: Text(c.name),
+          ),
+      ],
+      builder: (context, menu, _) => Tooltip(
+        message: 'Column',
+        child: TextButton.icon(
+          onPressed: () => menu.isOpen ? menu.close() : menu.open(),
+          iconAlignment: IconAlignment.end,
+          icon: const Icon(Icons.expand_more, size: 16),
+          label: Text(name),
+          style:
+              TextButton.styleFrom(
+                minimumSize: const Size(0, 28),
+                padding: const EdgeInsets.only(left: 8, right: 4),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                textStyle: Theme.of(context).textTheme.labelMedium,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ).copyWith(
+                side: WidgetStateProperty.resolveWith(
+                  (s) => s.contains(WidgetState.focused)
+                      ? BorderSide(color: t.focus, width: 2)
+                      : t.inkRule,
+                ),
+              ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ActivityList extends StatelessWidget {
-  const _ActivityList({required this.activity});
+  const _ActivityList({required this.activity, required this.ground});
   final List<Activity> activity;
+
+  /// What the list sits on, so the hollow dots read as holes in the line.
+  final Color ground;
 
   static String describe(Activity a) => switch (a.kind) {
     'created' => 'created this in ${a.data['column']}',
@@ -231,28 +396,70 @@ class _ActivityList extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = context.tokens;
-    final small = theme.textTheme.bodySmall!;
+    final body = theme.textTheme.bodyMedium!;
+    final newest = activity.reversed.toList();
+    Widget rail(double height) => SizedBox(
+      width: 1,
+      height: height,
+      child: ColoredBox(color: t.rule),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          padding: const EdgeInsets.only(bottom: 8),
-          decoration: BoxDecoration(border: Border(bottom: t.inkRule)),
-          child: Text('Activity', style: theme.textTheme.titleMedium),
-        ),
-        for (final a in activity.reversed)
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            decoration: BoxDecoration(border: Border(bottom: t.hairline)),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        Text('Activity', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 16),
+        for (final (i, a) in newest.indexed)
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  '${a.actor} ${describe(a)}',
-                  style: small.copyWith(color: t.ink),
+                // The timeline: a hairline through every dot; the newest dot is solid ink.
+                SizedBox(
+                  width: 11,
+                  child: Column(
+                    children: [
+                      i == 0 ? const SizedBox(height: 6) : rail(6),
+                      Container(
+                        width: 11,
+                        height: 11,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: i == 0 ? t.ink : ground,
+                          border: Border.all(
+                            color: i == 0 ? t.ink : t.muted,
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                      if (i < newest.length - 1)
+                        Expanded(child: rail(double.infinity)),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 2),
-                Text(time(a.createdAt), style: t.mono(small)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      bottom: i < newest.length - 1 ? 16 : 0,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${a.actor} ${describe(a)}',
+                          style: i == 0
+                              ? body.copyWith(fontWeight: FontWeight.w600)
+                              : body,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          time(a.createdAt),
+                          style: t.mono(theme.textTheme.bodySmall!),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -261,71 +468,79 @@ class _ActivityList extends StatelessWidget {
   }
 }
 
-/// A still outline of the page while the task loads: three fields, a button, and the rail.
+/// A still outline of the page while the task loads: title, brief, the header block's rules, and the rail.
 class _Skeleton extends StatelessWidget {
   const _Skeleton();
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    Widget block(double height, {double? width, Color? color}) => Container(
+    Widget bar(double height, {double? width}) => Container(
       height: height,
       width: width,
       decoration: BoxDecoration(
-        color: color ?? t.paper3,
-        borderRadius: BorderRadius.circular(Tokens.radiusControl),
-      ),
-    );
-    final form = Padding(
-      padding: const EdgeInsets.all(24),
-      child: Align(
-        alignment: Alignment.topLeft,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 960),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              block(48),
-              const SizedBox(height: 16),
-              block(48),
-              const SizedBox(height: 16),
-              block(160),
-              const SizedBox(height: 16),
-              block(40, width: 88),
-            ],
-          ),
-        ),
+        color: t.rule,
+        borderRadius: BorderRadius.circular(2),
       ),
     );
     return ExcludeSemantics(
       child: LayoutBuilder(
-        builder: (context, constraints) => constraints.maxWidth < 840
-            ? form
-            : Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(child: form),
-                  const VerticalDivider(width: 1),
-                  SizedBox(
-                    width: 340,
-                    child: ColoredBox(
-                      color: t.paper3,
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            for (final w in [96.0, 220.0, 180.0]) ...[
-                              block(14, width: w, color: t.rule),
-                              const SizedBox(height: 16),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= _wide;
+          final doc = Padding(
+            padding: wide
+                ? const EdgeInsets.fromLTRB(48, 32, 48, 0)
+                : const EdgeInsets.fromLTRB(16, 24, 16, 0),
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 804),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    bar(24, width: 320),
+                    const SizedBox(height: 24),
+                    bar(80),
+                    const SizedBox(height: 16),
+                    bar(40, width: 88),
+                    const SizedBox(height: 48),
+                    bar(2),
+                    const SizedBox(height: 12),
+                    bar(12, width: 240),
+                    const SizedBox(height: 8),
+                    bar(12, width: 180),
+                    const SizedBox(height: 12),
+                    bar(1),
+                  ],
+                ),
               ),
+            ),
+          );
+          if (!wide) return doc;
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: doc),
+              Container(
+                width: 360,
+                padding: const EdgeInsets.all(32),
+                decoration: BoxDecoration(
+                  color: t.paper3,
+                  border: Border(left: t.hairline),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final w in [96.0, 220.0, 180.0]) ...[
+                      bar(14, width: w),
+                      const SizedBox(height: 16),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

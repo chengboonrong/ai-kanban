@@ -1,17 +1,14 @@
-// Hallmark · theme: Furrow (dealt 1/3, seed kanban-board-where-agents-7934·8c3de98c·2026-11-18·r0)
-// shape: app screen · genre: modern-minimal · redesign: full · scope: app · v2.0.0
-// critique: a ruled ledger, not a stack of floating cards; tangerine only marks the primary action, the selection and focus.
-// finish-review: subagent · 8 findings · 6 resolved 1 partial (task width) 1 to owner (board retry) · gap: none
+// Impeccable · world: Internet-Draft (IETF RFC standards document) · mode: operate · seed:9edb3df007981102
+// The direction contract lives in .impeccable/surfaces/ (task page brief); DESIGN.md records the shipped system.
 //
 // The one place colours, faces, radii and durations live. Screens read them via
 // Theme.of(context) and `context.tokens`; no literal Color or fontFamily past this file.
 import 'package:flutter/material.dart';
 
-const _body = 'RedHatText';
-const _display = 'RedHatDisplay';
-const _mono = 'RedHatMono';
+const _body = 'SourceSans3';
+const _mono = 'SourceCodePro';
 
-/// Furrow tokens that Material's ColorScheme has no slot for.
+/// Draft tokens that Material's ColorScheme has no slot for.
 @immutable
 class Tokens extends ThemeExtension<Tokens> {
   const Tokens({
@@ -31,20 +28,21 @@ class Tokens extends ThemeExtension<Tokens> {
     required this.danger,
   });
 
-  /// Page ground, raised sheet (cards, fields), sunken well (lanes, code).
+  /// Page ground (white paper), raised sheet (fields, dialogs), side field (rails, lanes, code wells).
   final Color paper, paper2, paper3;
 
   /// Text: primary, secondary, quiet. [rule] is every hairline.
   final Color ink, ink2, muted, rule;
 
-  /// Tangerine is a fill with [accentInk] on it, never type.
+  /// Normative red: the primary action, the agent's own MUST/SHOULD/MAY, selection.
+  /// As a fill it carries [accentInk]; as type it marks normative words only.
   final Color accent, accentInk, accentSoft, focus;
 
-  /// Done / succeeded, and destructive / failed.
+  /// Verified / approved / passed, and destructive / failed (needs you).
   final Color green, greenSoft, danger;
 
   static const radiusControl = 6.0;
-  static const radiusCard = 10.0;
+  static const radiusCard = 6.0;
   static const durMicro = Duration(milliseconds: 120);
   static const durShort = Duration(milliseconds: 200);
 
@@ -55,42 +53,56 @@ class Tokens extends ThemeExtension<Tokens> {
     fontSize: (base.fontSize ?? 14) - 1,
   );
 
-  /// The board's signature: a 1px ink rule over a list.
+  /// The one normative act on a screen (Approve spec, Refine with AI): a red fill over the ink default.
+  ButtonStyle get normative =>
+      FilledButton.styleFrom(
+        backgroundColor: accent,
+        foregroundColor: accentInk,
+      ).copyWith(
+        side: WidgetStateProperty.resolveWith(
+          (s) => s.contains(WidgetState.focused)
+              ? BorderSide(color: ink, width: 2)
+              : BorderSide(color: accent),
+        ),
+      );
+
+  /// The header block's rules: 2px ink above, 1px ink below. Everything else is a [hairline].
+  BorderSide get headRule => BorderSide(color: ink, width: 2);
   BorderSide get inkRule => BorderSide(color: ink);
   BorderSide get hairline => BorderSide(color: rule);
 
   static const light = Tokens(
-    paper: Color(0xFFF5F1EA),
-    paper2: Color(0xFFFFFDFA),
-    paper3: Color(0xFFE9E4D9),
-    ink: Color(0xFF14110F),
-    ink2: Color(0xFF2C2825),
-    muted: Color(0xFF58514C),
-    rule: Color(0xFFDBD7CE),
-    accent: Color(0xFFFC6B33),
-    accentInk: Color(0xFF14110F),
-    accentSoft: Color(0xFFFED8C4),
-    focus: Color(0xFFD84A00),
-    green: Color(0xFF246E3A),
-    greenSoft: Color(0xFFD3EDD7),
-    danger: Color(0xFFAF2B25),
+    paper: Color(0xFFFFFFFF),
+    paper2: Color(0xFFFFFFFF),
+    paper3: Color(0xFFFAF9F7),
+    ink: Color(0xFF1A1A1A),
+    ink2: Color(0xFF33312E),
+    muted: Color(0xFF5E5B56),
+    rule: Color(0xFFE9E7E3),
+    accent: Color(0xFF9A2A1F),
+    accentInk: Color(0xFFFFFFFF),
+    accentSoft: Color(0xFFF5E2DF),
+    focus: Color(0xFF1A1A1A),
+    green: Color(0xFF2F6B3A),
+    greenSoft: Color(0xFFE4EFE5),
+    danger: Color(0xFF9A2A1F),
   );
 
   static const dark = Tokens(
-    paper: Color(0xFF161310),
-    paper2: Color(0xFF201C18),
-    paper3: Color(0xFF0F0D0A),
-    ink: Color(0xFFEBE7DF),
-    ink2: Color(0xFFD1CDC5),
-    muted: Color(0xFFA29E96),
-    rule: Color(0xFF36322D),
-    accent: Color(0xFFF97C3D),
-    accentInk: Color(0xFF14110F),
-    accentSoft: Color(0xFF4C2817),
-    focus: Color(0xFFFF8C53),
-    green: Color(0xFF6FC082),
-    greenSoft: Color(0xFF1A3520),
-    danger: Color(0xFFED7668),
+    paper: Color(0xFF151413),
+    paper2: Color(0xFF221F1D),
+    paper3: Color(0xFF1B1A18),
+    ink: Color(0xFFECEAE6),
+    ink2: Color(0xFFD6D3CE),
+    muted: Color(0xFFA19D96),
+    rule: Color(0xFF34312D),
+    accent: Color(0xFFE5735F),
+    accentInk: Color(0xFF151413),
+    accentSoft: Color(0xFF4A231D),
+    focus: Color(0xFFECEAE6),
+    green: Color(0xFF85C291),
+    greenSoft: Color(0xFF1D3322),
+    danger: Color(0xFFE5735F),
   );
 
   @override
@@ -139,36 +151,32 @@ ThemeData buildTheme(Brightness brightness) {
     surfaceTint: Colors.transparent,
   );
 
-  // Type: one scale at ~1.15, Display 600 for screen heads only.
-  TextStyle s(
-    double size,
-    FontWeight w, {
-    String family = _body,
-    double h = 1.4,
-  }) => TextStyle(
-    fontFamily: family,
-    fontSize: size,
-    fontWeight: w,
-    height: h,
-    color: t.ink,
-    letterSpacing: 0,
-  );
+  // Type: Source Sans 3 throughout, hierarchy by size and weight; Source Code Pro via [Tokens.mono].
+  TextStyle s(double size, FontWeight w, {double h = 1.4, double ls = 0}) =>
+      TextStyle(
+        fontFamily: _body,
+        fontSize: size,
+        fontWeight: w,
+        height: h,
+        color: t.ink,
+        letterSpacing: ls,
+      );
   const regular = FontWeight.w400,
-      medium = FontWeight.w500,
-      semi = FontWeight.w600;
+      semi = FontWeight.w600,
+      bold = FontWeight.w700;
   final text = TextTheme(
-    displaySmall: s(30, semi, family: _display, h: 1.1),
-    headlineMedium: s(26, semi, family: _display, h: 1.1),
-    headlineSmall: s(22, semi, family: _display, h: 1.15),
-    titleLarge: s(19, semi, family: _display, h: 1.2),
-    titleMedium: s(16, medium),
-    titleSmall: s(14, medium),
+    displaySmall: s(30, bold, h: 1.2, ls: -0.3),
+    headlineMedium: s(28, bold, h: 1.2, ls: -0.3),
+    headlineSmall: s(24, bold, h: 1.25, ls: -0.2),
+    titleLarge: s(20, bold, h: 1.3),
+    titleMedium: s(17, bold, h: 1.35),
+    titleSmall: s(15, semi, h: 1.35),
     bodyLarge: s(16, regular, h: 1.5),
-    bodyMedium: s(14, regular, h: 1.5),
-    bodySmall: s(13, regular, h: 1.45).copyWith(color: t.muted),
-    labelLarge: s(14, medium, h: 1.2),
-    labelMedium: s(13, medium, h: 1.2),
-    labelSmall: s(12, medium, h: 1.2).copyWith(color: t.muted),
+    bodyMedium: s(15, regular, h: 1.5),
+    bodySmall: s(13.5, regular, h: 1.45).copyWith(color: t.muted),
+    labelLarge: s(15, semi, h: 1.2),
+    labelMedium: s(13.5, semi, h: 1.2),
+    labelSmall: s(12.5, semi, h: 1.2).copyWith(color: t.muted),
   );
 
   final shape = RoundedRectangleBorder(
@@ -180,7 +188,7 @@ ThemeData buildTheme(Brightness brightness) {
         : null,
   );
   const controlSize = Size(0, 40);
-  const pad = EdgeInsets.symmetric(horizontal: 16);
+  const pad = EdgeInsets.symmetric(horizontal: 18);
   ButtonStyle base(ButtonStyle s) => s.copyWith(
     shape: WidgetStatePropertyAll(shape),
     minimumSize: const WidgetStatePropertyAll(controlSize),
@@ -231,7 +239,7 @@ ThemeData buildTheme(Brightness brightness) {
       titleSpacing: 16,
       toolbarHeight: 56,
       titleTextStyle: text.titleLarge,
-      shape: Border(bottom: BorderSide(color: t.ink)),
+      shape: Border(bottom: BorderSide(color: t.rule)),
     ),
     cardTheme: CardThemeData(
       color: t.paper2,
@@ -247,16 +255,16 @@ ThemeData buildTheme(Brightness brightness) {
       style:
           base(
             FilledButton.styleFrom(
-              backgroundColor: t.accent,
-              foregroundColor: t.accentInk,
+              backgroundColor: t.ink,
+              foregroundColor: t.paper,
               disabledBackgroundColor: t.paper3,
               disabledForegroundColor: t.muted,
             ),
           ).copyWith(
             side: WidgetStateProperty.resolveWith(
               (s) => s.contains(WidgetState.focused)
-                  ? BorderSide(color: t.ink, width: 2)
-                  : BorderSide(color: Color.lerp(t.accent, t.ink, 0.22)!),
+                  ? BorderSide(color: t.accent, width: 2)
+                  : BorderSide(color: t.ink),
             ),
           ),
     ),
@@ -265,13 +273,13 @@ ThemeData buildTheme(Brightness brightness) {
           base(
             OutlinedButton.styleFrom(
               foregroundColor: t.ink,
-              backgroundColor: t.paper2,
+              backgroundColor: t.paper,
             ),
           ).copyWith(
             side: WidgetStateProperty.resolveWith(
               (s) => s.contains(WidgetState.focused)
                   ? BorderSide(color: t.focus, width: 2)
-                  : BorderSide(color: t.rule),
+                  : BorderSide(color: t.ink),
             ),
           ),
     ),
@@ -323,7 +331,7 @@ ThemeData buildTheme(Brightness brightness) {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(Tokens.radiusCard),
-        side: BorderSide(color: t.ink),
+        side: BorderSide(color: t.rule),
       ),
       titleTextStyle: text.titleLarge,
       contentTextStyle: text.bodyMedium,
@@ -331,8 +339,7 @@ ThemeData buildTheme(Brightness brightness) {
     popupMenuTheme: PopupMenuThemeData(
       color: t.paper2,
       surfaceTintColor: Colors.transparent,
-      elevation: 2,
-      shadowColor: t.ink.withValues(alpha: 0.3),
+      elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(Tokens.radiusControl),
         side: BorderSide(color: t.rule),
@@ -395,6 +402,13 @@ ThemeData buildTheme(Brightness brightness) {
       cursorColor: t.ink,
       selectionColor: t.accentSoft,
       selectionHandleColor: t.accent,
+    ),
+    checkboxTheme: CheckboxThemeData(
+      fillColor: WidgetStateProperty.resolveWith(
+        (s) => s.contains(WidgetState.selected) ? t.ink : Colors.transparent,
+      ),
+      checkColor: WidgetStatePropertyAll(t.paper),
+      side: BorderSide(color: t.muted, width: 1.5),
     ),
   );
 }

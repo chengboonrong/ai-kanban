@@ -32,23 +32,10 @@ Future<void> _open(BuildContext context, String url) async {
   }
 }
 
-/// How a status reads: neutral and quiet tags sit on paper3, the rest carry their state.
+/// How a status reads: neutral and quiet tags are outlined, the rest carry their state as a fill.
 enum StatusTone { neutral, quiet, active, good, bad }
 
-/// Text and ground colours of a [StatusTone].
-(Color, Color) _toneColors(BuildContext context, StatusTone tone) {
-  final t = context.tokens;
-  final error = Theme.of(context).colorScheme.error;
-  return switch (tone) {
-    StatusTone.neutral => (t.ink2, t.paper3),
-    StatusTone.quiet => (t.muted, t.paper3),
-    StatusTone.active => (t.ink, t.accentSoft),
-    StatusTone.good => (t.green, t.greenSoft),
-    StatusTone.bad => (error, error.withValues(alpha: 0.12)),
-  };
-}
-
-/// A small, non-interactive state tag: the state in words, tinted by [tone].
+/// A small, non-interactive state tag: the state in words, a 1px tag tinted by [tone].
 class StatusChip extends StatelessWidget {
   const StatusChip({super.key, required this.label, required this.tone});
   final String label;
@@ -56,13 +43,24 @@ class StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (fg, bg) = _toneColors(context, tone);
+    final t = context.tokens;
+    // Text, ground and border.
+    final (fg, bg, line) = switch (tone) {
+      StatusTone.neutral => (t.ink, Colors.transparent, t.ink),
+      StatusTone.quiet => (t.muted, Colors.transparent, t.rule),
+      StatusTone.active => (t.paper, t.ink, t.ink),
+      StatusTone.good => (t.green, t.greenSoft, t.greenSoft),
+      StatusTone.bad => (t.danger, t.accentSoft, t.accentSoft),
+    };
     return Chip(
       label: Text(label),
       labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(color: fg),
+      labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+      padding: EdgeInsets.zero,
       backgroundColor: bg,
-      side: BorderSide.none,
-      visualDensity: VisualDensity.compact,
+      side: BorderSide(color: line),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
   }
@@ -208,98 +206,101 @@ class GitHubPanel extends ConsumerWidget {
     final async = ref.watch(githubProvider(taskId));
     final gh = async.value;
     final issue = gh?.issue;
+    // The issue line reads like the spec's header block: mono, between a 2px and a 1px ink rule.
+    final line = t.mono(theme.textTheme.bodyMedium!);
+    final failure = theme.textTheme.bodyMedium?.copyWith(color: t.danger);
 
     return Padding(
-      padding: const EdgeInsets.only(top: 32),
+      padding: const EdgeInsets.only(top: 48),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            padding: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(border: Border(bottom: t.inkRule)),
-            child: Text('GitHub', style: theme.textTheme.titleMedium),
-          ),
-          const SizedBox(height: 12),
+          Text('GitHub', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
           switch (async) {
             AsyncValue(:final error?) when gh == null => Text(
               errorMessage(error),
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.error,
-              ),
+              style: failure,
             ),
-            _ when gh == null => const LinearProgressIndicator(),
+            _ when gh == null => const LinearProgressIndicator(minHeight: 2),
             _ => Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                switch (issue) {
-                  null => Row(
-                    children: [
-                      const Expanded(child: Text('No GitHub issue yet')),
-                      OutlinedButton(
-                        onPressed: () => _retry(context, ref),
-                        child: const Text('Create issue'),
-                      ),
-                    ],
+                Container(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  decoration: BoxDecoration(
+                    border: Border(top: t.headRule, bottom: t.inkRule),
                   ),
-                  GitHubIssue(state: 'created', :final number, :final url) =>
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: url == null
-                            ? null
-                            : () => _open(context, url),
-                        icon: const Icon(Icons.open_in_new, size: 18),
-                        label: Text.rich(
-                          TextSpan(
+                  alignment: Alignment.centerLeft,
+                  child: switch (issue) {
+                    null => Row(
+                      children: [
+                        Expanded(
+                          child: Text('No GitHub issue yet', style: line),
+                        ),
+                        OutlinedButton(
+                          onPressed: () => _retry(context, ref),
+                          child: const Text('Create issue'),
+                        ),
+                      ],
+                    ),
+                    GitHubIssue(state: 'created', :final number, :final url) =>
+                      Row(
+                        children: [
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              textStyle: line,
+                            ),
+                            iconAlignment: IconAlignment.end,
+                            onPressed: url == null
+                                ? null
+                                : () => _open(context, url),
+                            icon: const Icon(Icons.open_in_new, size: 16),
+                            label: Text('Issue #$number'),
+                          ),
+                          if (issue.issueState case final state?) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              '· $state',
+                              style: line.copyWith(color: t.muted),
+                            ),
+                          ],
+                        ],
+                      ),
+                    GitHubIssue(state: 'failed', :final error) => Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const TextSpan(text: 'Issue '),
-                              TextSpan(
-                                text: '#$number',
-                                style: t.mono(const TextStyle()),
-                              ),
-                              if (issue.issueState == 'closed')
-                                const TextSpan(text: ' (closed)'),
+                              Text('Couldn\'t create the issue', style: line),
+                              Text(error ?? '', style: failure),
                             ],
                           ),
                         ),
-                      ),
-                    ),
-                  GitHubIssue(state: 'failed', :final error) => Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('Couldn\'t create the issue'),
-                            Text(
-                              error ?? '',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.error,
-                              ),
-                            ),
-                          ],
+                        const SizedBox(width: 16),
+                        FilledButton(
+                          onPressed: () => _retry(context, ref),
+                          child: const Text('Retry'),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      FilledButton(
-                        onPressed: () => _retry(context, ref),
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                  _ => const Row(
-                    children: [
-                      SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      SizedBox(width: 8),
-                      Text('Creating issue…'),
-                    ],
-                  ),
-                },
-                if (gh.prs.isNotEmpty) const SizedBox(height: 8),
-                for (final pr in gh.prs) _PullRequestTile(pr: pr),
+                      ],
+                    ),
+                    _ => Row(
+                      children: [
+                        const SizedBox.square(
+                          dimension: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 8),
+                        Text('Creating issue…', style: line),
+                      ],
+                    ),
+                  },
+                ),
+                for (final (i, pr) in gh.prs.indexed)
+                  _PullRequestTile(pr: pr, first: i == 0),
                 if (gh.prs.isEmpty && issue?.state == 'created')
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -319,11 +320,15 @@ class GitHubPanel extends ConsumerWidget {
 }
 
 class _PullRequestTile extends StatelessWidget {
-  const _PullRequestTile({required this.pr});
+  const _PullRequestTile({required this.pr, required this.first});
   final PullRequest pr;
+
+  /// Sits right under the issue line's ink rule, so it draws no hairline of its own.
+  final bool first;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final t = context.tokens;
     final _Look state = switch (pr.state) {
       'merged' => ('Merged', StatusTone.good),
@@ -336,29 +341,33 @@ class _PullRequestTile extends StatelessWidget {
       ?_reviewLook(pr.review),
       ?_ciLook(pr.ci),
     ];
+    final small = theme.textTheme.bodySmall!;
     return DecoratedBox(
-      decoration: BoxDecoration(border: Border(top: t.hairline)),
+      decoration: BoxDecoration(border: first ? null : Border(top: t.hairline)),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-        title: Text(pr.title),
+        contentPadding: EdgeInsets.zero,
+        minVerticalPadding: 12,
+        title: Text(pr.title, style: theme.textTheme.titleSmall),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            const SizedBox(height: 2),
             Text.rich(
               TextSpan(
                 children: [
                   TextSpan(
                     text: '${pr.repository}#${pr.number}',
-                    style: t.mono(const TextStyle()),
+                    style: t.mono(small),
                   ),
                   if (pr.author != null) TextSpan(text: ' by ${pr.author}'),
                 ],
               ),
+              style: small,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 8),
             Wrap(
-              spacing: 4,
-              runSpacing: 4,
+              spacing: 6,
+              runSpacing: 6,
               children: [
                 for (final (label, tone) in chips)
                   StatusChip(label: label, tone: tone),
