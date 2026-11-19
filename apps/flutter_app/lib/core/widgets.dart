@@ -3,6 +3,11 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'theme.dart';
 
+/// The side inset that centres the 880px ledger (workspaces, workers). The app bar gives it to its leading
+/// slot, not to `titleSpacing`, which the toolbar takes off both sides of the title.
+double ledgerInset(BuildContext context) =>
+    ((MediaQuery.sizeOf(context).width - 880) / 2).clamp(16.0, double.infinity);
+
 /// Runs [action], showing any failure as a SnackBar.
 Future<void> runWithFeedback(
   BuildContext context,

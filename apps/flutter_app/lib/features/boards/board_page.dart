@@ -377,9 +377,13 @@ class _Notice extends StatelessWidget {
   }
 }
 
-/// Lane width: on phones one lane nearly fills the screen and its neighbour peeks in; elsewhere fixed.
-double _laneWidth(BoxConstraints constraints) =>
-    constraints.maxWidth < 600 ? constraints.maxWidth * 0.85 : 288.0;
+/// Lane width: on phones one lane nearly fills the screen and its neighbour peeks in; elsewhere the lanes
+/// share the window, from 288px (scrolling) up to 360px (wider cards stop helping).
+double _laneWidth(BoxConstraints constraints, int lanes) =>
+    constraints.maxWidth < 600
+    ? constraints.maxWidth * 0.85
+    : ((constraints.maxWidth - _lanePadding.horizontal) / lanes - _laneGap)
+          .clamp(288.0, 360.0);
 
 const _laneGap = 16.0;
 const _lanePadding = EdgeInsets.fromLTRB(16, 16, 0, 16);
@@ -394,7 +398,7 @@ class _BoardView extends StatelessWidget {
     final t = context.tokens;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width = _laneWidth(constraints);
+        final width = _laneWidth(constraints, board.columns.length);
         return ReorderableListView.builder(
           scrollDirection: Axis.horizontal,
           buildDefaultDragHandles: false,
@@ -461,7 +465,7 @@ class _BoardSkeleton extends StatelessWidget {
                 children: [
                   for (final rows in const [3, 2, 3, 2])
                     Container(
-                      width: _laneWidth(constraints),
+                      width: _laneWidth(constraints, 4),
                       margin: const EdgeInsets.only(right: _laneGap),
                       padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
                       decoration: BoxDecoration(
@@ -827,32 +831,40 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
               fontWeight: FontWeight.w600,
             ),
           ),
-          // Queued: why it waits, in one quiet line, and the way to the Workers page when it's yours to fix.
+          // Queued: why it waits, in full, and under it the way to the Workers page when it's yours to fix.
           if (task.refinement == 'queued')
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  GlyphIcon(
-                    Glyph.waiting,
-                    size: 14,
-                    color: t.idle,
-                    motion: GlyphMotion.loop,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      board.waiting?.describe(
-                            viewer: viewer,
-                            repository: board.repository,
-                          ) ??
-                          'Waiting for a worker',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: small,
-                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: GlyphIcon(
+                          Glyph.waiting,
+                          size: 14,
+                          color: t.idle,
+                          motion: GlyphMotion.loop,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          board.waiting?.describe(
+                                viewer: viewer,
+                                repository: board.repository,
+                              ) ??
+                              'Waiting for a worker',
+                          style: small,
+                        ),
+                      ),
+                    ],
                   ),
                   if (board.waiting?.mine(viewer) ?? false)
+                    // The button's own 20px padding lines its label up under the message (14px glyph + 6px gap).
                     const WorkersButton(),
                 ],
               ),

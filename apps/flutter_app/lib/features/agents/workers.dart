@@ -78,15 +78,17 @@ class WorkersPage extends ConsumerWidget {
     final t = context.tokens;
     final quiet = theme.textTheme.bodyMedium?.copyWith(color: t.muted);
     // Same 880px ledger as the workspaces screen; the app bar shares the inset.
-    final side = ((MediaQuery.sizeOf(context).width - 880) / 2).clamp(
-      16.0,
-      double.infinity,
-    );
+    final side = ledgerInset(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Workers'),
-        // Line the title up with the content, past the 56px back button.
-        titleSpacing: (side - kToolbarHeight).clamp(16.0, double.infinity),
+        // Once the inset fits it, the back key sits just before the column and the title lines up with the
+        // content; narrower, the app bar's own back key keeps it where the other pages have it.
+        leading: side < kToolbarHeight
+            ? null
+            : const Align(alignment: Alignment.centerRight, child: BackButton()),
+        leadingWidth: side < kToolbarHeight ? null : side,
+        titleSpacing: side < kToolbarHeight ? null : 0,
         actions: [
           FilledButton(
             onPressed: () => _connect(context, ref),
@@ -302,7 +304,9 @@ class _PairingDialogState extends State<PairingDialog> {
     return AlertDialog(
       title: const Text('Connect a worker'),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480),
+        // Wide enough that the command's first line ends after the code, so on tablets and up the code doesn't
+        // break at its hyphen.
+        constraints: const BoxConstraints(maxWidth: 600),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-19T03:10:56+00:00",
+  "generatedAt": "2026-11-19T05:49:00+00:00",
   "title": "Design System: AI Kanban",
   "extensions": {
     "colorMeta": {
@@ -641,119 +641,199 @@
       {
         "name": "micro",
         "value": "120ms",
-        "purpose": "Button and card state changes."
+        "purpose": "Button, field and card state changes (hover wash, seam to ink)."
       },
       {
-        "name": "short",
+        "name": "route-fade",
         "value": "200ms ease-out",
-        "purpose": "Route fade; removed under reduced motion."
+        "purpose": "Route change is a fade; removed under reduced motion."
+      },
+      {
+        "name": "glyph-still",
+        "value": "none",
+        "purpose": "Default for every glyph that is not live. No hover animation."
       },
       {
         "name": "glyph-once",
         "value": "400ms cubic-bezier(0.175, 0.885, 0.32, 1.275)",
-        "purpose": "A glyph plays once when a state arrives (ease-out-back, one small overshoot)."
+        "purpose": "One beat (ease-out-back, one small overshoot) when a state arrives: worker online or busy, spec ready, approved, readiness reached."
       },
       {
         "name": "glyph-loop",
-        "value": "glyph's own tempo",
-        "purpose": "Only while work runs: refinement, outbox sending, CI running, waiting for a worker."
+        "value": "glyph's own tempo, infinite",
+        "purpose": "Only while work runs: refinement queued or running, outbox sending, CI running, waiting for a worker."
       },
       {
         "name": "run-arc",
         "value": "1400ms linear, infinite",
-        "purpose": "The run arc spins while a refinement is live."
+        "purpose": "The run arc spins once per 1400ms while a refinement is live."
       },
       {
         "name": "dial",
-        "value": "700ms ease-out-cubic",
-        "purpose": "Readiness dial fills to value; jumps under reduced motion."
+        "value": "700ms cubic-bezier(0.215, 0.61, 0.355, 1)",
+        "purpose": "Readiness dial fills to value (ease-out-cubic); jumps under reduced motion."
+      },
+      {
+        "name": "tooltip-wait",
+        "value": "400ms",
+        "purpose": "Delay before the words behind a glyph-only state appear."
       },
       {
         "name": "reduced-motion",
         "value": "none",
-        "purpose": "Every glyph still, no one-shots, no route fade."
+        "purpose": "Loops stop, one-shots do not play, dials jump to value, route fades are removed."
       }
     ],
     "breakpoints": [
       {
         "name": "phone",
-        "value": "600px"
+        "value": "600px",
+        "purpose": "Below this a board lane is 85% of the screen so the next lane peeks in; above it lanes share the window from 288px to 360px."
       },
       {
         "name": "task-two-column",
-        "value": "1100px"
+        "value": "1000px",
+        "purpose": "At and above this the task page puts the 360px activity rail beside the spec column, which centres in the remaining space; below, the rail stacks under the spec."
+      },
+      {
+        "name": "min-width",
+        "value": "360px",
+        "purpose": "Every layout works at this phone width."
       }
-    ]
+    ],
+    "layout": [
+      {
+        "name": "lane",
+        "value": "288-360px, sharing the window (85% under 600px)"
+      },
+      {
+        "name": "activity-rail",
+        "value": "360px"
+      },
+      {
+        "name": "ledger",
+        "value": "880px",
+        "purpose": "Home and Workers centred column; the app bar shares the inset."
+      },
+      {
+        "name": "spec-column",
+        "value": "900px max"
+      },
+      {
+        "name": "prose-measure",
+        "value": "680px max"
+      },
+      {
+        "name": "app-bar",
+        "value": "56px"
+      }
+    ],
+    "focus": {
+      "value": "2px ring",
+      "light": "#1C1C1E",
+      "dark": "#ECECEA",
+      "purpose": "Keyboard focus on buttons, fields and cards; never orange."
+    },
+    "states": {
+      "hoverWash": "ink at 5% alpha",
+      "pressWash": "ink at 6% alpha",
+      "splash": "none",
+      "disabledSeam": "seam at 55% alpha"
+    }
   },
   "components": [
     {
       "name": "Ink Button",
       "kind": "button",
       "refersTo": "button-ink",
-      "description": "Default filled action, including Refine with AI.",
+      "description": "Default filled action: Refine with AI, dialog confirms, Save.",
       "html": "<button class=\"ds-btn-ink\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 8V4H8\"/><rect width=\"16\" height=\"12\" x=\"4\" y=\"8\" rx=\"2\"/><path d=\"M2 14h2M20 14h2M15 13v2M9 13v2\"/></svg>Refine with AI</button>",
-      "css": ".ds-btn-ink { font-family: Manrope, sans-serif; font-weight: 800; font-size: 14.5px; min-height: 42px; padding: 0 20px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background 120ms, border-color 120ms; background: #1C1C1E; color: #F4F4F2; border: 1px solid #1C1C1E; } .ds-btn-ink:hover { background: #34363A; } .ds-btn-ink:focus-visible { outline: none; border: 2px solid #FF5A1F; }"
+      "css": ".ds-btn-ink { font-family: Manrope, sans-serif; font-weight: 800; font-size: 14.5px; line-height: 1.2; min-height: 42px; padding: 0 20px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background-color 120ms, border-color 120ms; background: #1C1C1E; color: #F4F4F2; border: 1px solid #1C1C1E; } .ds-btn-ink:hover { background: color-mix(in srgb, #F4F4F2 8%, #1C1C1E); } .ds-btn-ink:focus-visible { outline: 2px solid #1C1C1E; outline-offset: 2px; }"
     },
     {
       "name": "Live Button",
       "kind": "button",
       "refersTo": "button-live",
-      "description": "The one act waiting on you: Approve spec only.",
+      "description": "Orange fill for Approve spec only; the one filled action that means now.",
       "html": "<button class=\"ds-btn-live\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 6 9 17l-5-5\"/></svg>Approve spec</button>",
-      "css": ".ds-btn-live { font-family: Manrope, sans-serif; font-weight: 800; font-size: 14.5px; min-height: 42px; padding: 0 20px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background 120ms, border-color 120ms; background: #FF5A1F; color: #1C1C1E; border: 1px solid #FF5A1F; } .ds-btn-live:hover { background: #FF6A33; } .ds-btn-live:focus-visible { outline: none; border: 2px solid #1C1C1E; }"
+      "css": ".ds-btn-live { font-family: Manrope, sans-serif; font-weight: 800; font-size: 14.5px; line-height: 1.2; min-height: 42px; padding: 0 20px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background-color 120ms, border-color 120ms; background: #FF5A1F; color: #1C1C1E; border: 1px solid #FF5A1F; } .ds-btn-live:hover { background: color-mix(in srgb, #1C1C1E 8%, #FF5A1F); } .ds-btn-live:focus-visible { outline: 2px solid #1C1C1E; outline-offset: 2px; }"
     },
     {
       "name": "Outline Button",
       "kind": "button",
       "refersTo": "button-outline",
-      "description": "Secondary action: Refine again, Cancel, Connect.",
+      "description": "Sheet fill with a 1.5px ink border: Refine again, Cancel on a run, Connect.",
       "html": "<button class=\"ds-btn-outline\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 8V4H8\"/><rect width=\"16\" height=\"12\" x=\"4\" y=\"8\" rx=\"2\"/><path d=\"M2 14h2M20 14h2M15 13v2M9 13v2\"/></svg>Refine again</button>",
-      "css": ".ds-btn-outline { font-family: Manrope, sans-serif; font-weight: 800; font-size: 14.5px; min-height: 42px; padding: 0 20px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background 120ms, border-color 120ms; background: #F4F4F2; color: #1C1C1E; border: 1.5px solid #1C1C1E; } .ds-btn-outline:hover { background: #E6E6E3; } .ds-btn-outline:focus-visible { outline: none; border: 2px solid #1C1C1E; }"
+      "css": ".ds-btn-outline { font-family: Manrope, sans-serif; font-weight: 800; font-size: 14.5px; line-height: 1.2; min-height: 42px; padding: 0 20px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background-color 120ms, border-color 120ms; background: #F4F4F2; color: #1C1C1E; border: 1.5px solid #1C1C1E; } .ds-btn-outline:hover { background: color-mix(in srgb, #1C1C1E 5%, #F4F4F2); } .ds-btn-outline:focus-visible { outline: 2px solid #1C1C1E; outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "The confirm dialog's destructive action: red fill, sheet text.",
+      "html": "<button class=\"ds-btn-danger\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 6h18\"/><path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\"/><path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\"/><path d=\"M10 11v6M14 11v6\"/></svg>Delete task</button>",
+      "css": ".ds-btn-danger { font-family: Manrope, sans-serif; font-weight: 800; font-size: 14.5px; line-height: 1.2; min-height: 42px; padding: 0 20px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: background-color 120ms, border-color 120ms; background: #C92A2A; color: #F4F4F2; border: 1px solid #C92A2A; } .ds-btn-danger:hover { background: color-mix(in srgb, #F4F4F2 8%, #C92A2A); } .ds-btn-danger:focus-visible { outline: 2px solid #1C1C1E; outline-offset: 2px; }"
     },
     {
       "name": "Text Field",
       "kind": "input",
       "refersTo": "input",
-      "description": "Sheet field with a seam; 2px focus border.",
-      "html": "<input class=\"ds-input\" placeholder=\"Task title\" />",
-      "css": ".ds-input { font-family: Manrope, sans-serif; font-size: 14.5px; color: #1C1C1E; background: #F4F4F2; border: 1px solid #CFCFCB; border-radius: 10px; padding: 13px 14px; } .ds-input::placeholder { color: #5A5E63; } .ds-input:focus-visible { outline: none; border: 2px solid #1C1C1E; padding: 12px 13px; }"
+      "description": "Sheet fill, one-pixel seam, 10px radius; 2px focus border, red on error.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">Title</span><input class=\"ds-input\" placeholder=\"Retry photo uploads after network loss\" /></label>",
+      "css": ".ds-field { display: grid; gap: 6px; font-family: Manrope, sans-serif; width: 320px; } .ds-field-label { font-size: 13px; font-weight: 600; color: #5A5E63; } .ds-input { font-family: Manrope, sans-serif; font-size: 14.5px; line-height: 1.5; color: #1C1C1E; background: #F4F4F2; border: 1px solid #CFCFCB; border-radius: 10px; padding: 13px 14px; outline: none; transition: border-color 120ms; } .ds-input::placeholder { color: #5A5E63; } .ds-input:hover { border-color: #5A5E63; } .ds-input:focus-visible { border: 2px solid #1C1C1E; padding: 12px 13px; } .ds-input[aria-invalid=\"true\"] { border-color: #C92A2A; } .ds-input:disabled { border-color: rgba(207,207,203,0.55); color: #5A5E63; }"
     },
     {
       "name": "Task Card",
       "kind": "card",
       "refersTo": "card",
-      "description": "Sheet on a lane; seam goes ink on hover; ready pill when a spec waits.",
-      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Retry photo uploads after network loss</div><span class=\"ds-pill-ready\">Spec ready for review</span></div>",
-      "css": ".ds-card { font-family: Manrope, sans-serif; background: #F4F4F2; border: 1px solid #CFCFCB; border-radius: 12px; padding: 12px; width: 264px; display: grid; gap: 10px; transition: border-color 120ms; } .ds-card:hover { border-color: #1C1C1E; } .ds-card-title { font-size: 14.5px; color: #1C1C1E; } .ds-pill-ready { justify-self: start; background: #FF5A1F; color: #1C1C1E; border-radius: 999px; padding: 3px 10px 3px 6px; font-size: 13px; font-weight: 600; }"
+      "description": "A sheet on the side-field lane: seam at rest, ink seam on hover, 2px ring on keyboard focus, no shadow.",
+      "html": "<div class=\"ds-lane\"><div class=\"ds-card\" tabindex=\"0\"><div class=\"ds-card-title\">Retry photo uploads after network loss</div><div class=\"ds-card-meta\">#142 · 2h</div></div></div>",
+      "css": ".ds-lane { background: #DADAD6; border-radius: 12px; padding: 8px; width: 288px; } .ds-card { font-family: Manrope, sans-serif; background: #F4F4F2; border: 1px solid #CFCFCB; border-radius: 12px; padding: 12px; display: grid; gap: 8px; transition: border-color 120ms; cursor: grab; } .ds-card:hover { border-color: #1C1C1E; } .ds-card:focus-visible { outline: 2px solid #1C1C1E; outline-offset: 0; border-color: transparent; } .ds-card-title { font-size: 14.5px; line-height: 1.5; color: #1C1C1E; } .ds-card-meta { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 12px; color: #5A5E63; }"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "refersTo": "status-pill-ready",
+      "description": "\"Spec ready for review\" on a card: orange pill with a 14px spec glyph that plays once on arrival (400ms ease-out-back).",
+      "html": "<span class=\"ds-pill-ready\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M16 13H8M16 17H8M10 9H8\"/></svg>Spec ready for review</span>",
+      "css": ".ds-pill-ready { display: inline-flex; align-items: center; gap: 5px; font-family: Manrope, sans-serif; font-size: 13px; font-weight: 600; line-height: 1.2; background: #FF5A1F; color: #1C1C1E; border-radius: 999px; padding: 3px 10px 3px 6px; } .ds-pill-ready svg { stroke-width: 1.75; animation: ds-once 400ms cubic-bezier(0.175, 0.885, 0.32, 1.275) 1; } @keyframes ds-once { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } } @media (prefers-reduced-motion: reduce) { .ds-pill-ready svg { animation: none; } }"
+    },
+    {
+      "name": "Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Side-field fill, no border, pill, Label medium.",
+      "html": "<span class=\"ds-chip\">bug</span> <span class=\"ds-chip\">mobile</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; font-family: Manrope, sans-serif; font-size: 13px; font-weight: 600; line-height: 1.2; color: #1C1C1E; background: #DADAD6; border: none; border-radius: 999px; padding: 6px 12px; }"
     },
     {
       "name": "Screen Strip",
       "kind": "custom",
       "refersTo": "screen-strip",
-      "description": "The one black screen: cells of glyph, tiny label, mono value, plus an optional status footer.",
-      "html": "<div class=\"ds-screen\"><div class=\"ds-cells\"><div class=\"ds-cell\"><svg class=\"ds-dial\" viewBox=\"0 0 26 26\"><circle cx=\"13\" cy=\"13\" r=\"11\" fill=\"none\" stroke=\"rgba(138,143,149,.35)\" stroke-width=\"3.5\"/><circle cx=\"13\" cy=\"13\" r=\"11\" fill=\"none\" stroke=\"#2FD27C\" stroke-width=\"3.5\" stroke-linecap=\"round\" stroke-dasharray=\"49.8 69.1\" transform=\"rotate(-90 13 13)\"/></svg><div><div class=\"ds-lbl\">readiness</div><div class=\"ds-val\">72%</div></div></div><div class=\"ds-cell\"><div><div class=\"ds-lbl\">evidence</div><div class=\"ds-val\">3 · 2 verified</div></div></div></div><div class=\"ds-foot\"><b>Ready for review</b> <span>Version 1 · commit 3f9c2ab</span></div></div>",
-      "css": ".ds-screen { font-family: Manrope, sans-serif; background: #111214; border-radius: 14px; padding: 16px 20px; } .ds-cells { display: flex; flex-wrap: wrap; gap: 14px 28px; } .ds-cell { display: flex; align-items: center; gap: 12px; } .ds-dial { width: 26px; height: 26px; } .ds-lbl { font-size: 12px; font-weight: 600; color: #8A8F95; } .ds-val { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 600; color: #E9E9E6; } .ds-foot { margin-top: 14px; font-size: 14.5px; } .ds-foot b { color: #FF6A33; font-weight: 800; } .ds-foot span { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 12px; color: #8A8F95; }"
+      "description": "The one black screen per screen: glyph or dial cells over tiny lowercase labels and mono readouts; footer is the status readout. The run arc spins (1400ms) only while a refinement is live.",
+      "html": "<div class=\"ds-screen\"><div class=\"ds-cells\"><div class=\"ds-cell\"><svg class=\"ds-arc\" viewBox=\"0 0 26 26\"><circle cx=\"13\" cy=\"13\" r=\"10\" fill=\"none\" stroke=\"rgba(138,143,149,0.35)\" stroke-width=\"2.5\"/><path d=\"M13 3a10 10 0 0 1 10 10\" fill=\"none\" stroke=\"#FF6A33\" stroke-width=\"2.5\" stroke-linecap=\"round\"/></svg><div><div class=\"ds-lbl\">run</div><div class=\"ds-val\">reading</div></div></div><div class=\"ds-cell\"><svg class=\"ds-dial\" viewBox=\"0 0 26 26\"><circle cx=\"13\" cy=\"13\" r=\"11\" fill=\"none\" stroke=\"rgba(138,143,149,0.35)\" stroke-width=\"3.5\"/><circle cx=\"13\" cy=\"13\" r=\"11\" fill=\"none\" stroke=\"#2FD27C\" stroke-width=\"3.5\" stroke-linecap=\"round\" stroke-dasharray=\"49.8 69.1\" transform=\"rotate(-90 13 13)\"/></svg><div><div class=\"ds-lbl\">readiness</div><div class=\"ds-val\">72%</div></div></div><div class=\"ds-cell\"><span class=\"ds-cglyph\"><svg class=\"ds-blue\" width=\"26\" height=\"26\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M16 13H8M16 17H8M10 9H8\"/></svg></span><div><div class=\"ds-lbl\">evidence</div><div class=\"ds-val\">3 · 2 verified</div></div></div></div><div class=\"ds-foot\"><b>Ready for review</b><span>v1 · 3f9c2ab · claude-code</span></div></div>",
+      "css": ".ds-screen { font-family: Manrope, sans-serif; background: #111214; border-radius: 14px; padding: 16px 20px; max-width: 560px; } .ds-cells { display: flex; flex-wrap: wrap; gap: 14px 28px; } .ds-cell { display: flex; align-items: center; gap: 12px; } .ds-arc, .ds-dial { width: 26px; height: 26px; } .ds-arc { animation: ds-spin 1400ms linear infinite; } .ds-blue { color: #6E97FF; display: block; } @keyframes ds-spin { to { transform: rotate(360deg); } } @media (prefers-reduced-motion: reduce) { .ds-arc { animation: none; } } .ds-lbl { font-size: 12px; font-weight: 600; line-height: 1.2; color: #8A8F95; } .ds-val { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 600; color: #E9E9E6; } .ds-foot { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; font-size: 14.5px; } .ds-foot b { color: #FF6A33; font-weight: 800; } .ds-foot span { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 12px; color: #8A8F95; }"
     },
     {
       "name": "Glyph Key",
       "kind": "custom",
       "refersTo": "glyph-key",
-      "description": "Round synth key; the disc colour is the state.",
-      "html": "<span class=\"ds-key\" aria-label=\"Online\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect width=\"16\" height=\"16\" x=\"4\" y=\"4\" rx=\"2\"/><rect width=\"6\" height=\"6\" x=\"9\" y=\"9\" rx=\"1\"/><path d=\"M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2\"/></svg></span>",
-      "css": ".ds-key { width: 32px; height: 32px; border-radius: 50%; background: #0E7A42; color: #1C1C1E; display: inline-grid; place-items: center; } .ds-key svg { width: 18px; height: 18px; }"
+      "description": "A round synth key: the colour is the state (green online, orange busy, blue evidence, grey idle), one Lucide glyph at 56% of the diameter. Still unless the state just arrived.",
+      "html": "<span class=\"ds-keys\"><span class=\"ds-key\" style=\"background:#0E7A42\" aria-label=\"Online\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect width=\"16\" height=\"16\" x=\"4\" y=\"4\" rx=\"2\"/><rect width=\"6\" height=\"6\" x=\"9\" y=\"9\" rx=\"1\"/><path d=\"M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2\"/></svg></span><span class=\"ds-key\" style=\"background:#FF5A1F\" aria-label=\"Busy\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect width=\"16\" height=\"16\" x=\"4\" y=\"4\" rx=\"2\"/><rect width=\"6\" height=\"6\" x=\"9\" y=\"9\" rx=\"1\"/><path d=\"M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2\"/></svg></span><span class=\"ds-key\" style=\"background:#2F6BFF\" aria-label=\"Evidence\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect width=\"16\" height=\"16\" x=\"4\" y=\"4\" rx=\"2\"/><rect width=\"6\" height=\"6\" x=\"9\" y=\"9\" rx=\"1\"/><path d=\"M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2\"/></svg></span><span class=\"ds-key\" style=\"background:#9AA0A6\" aria-label=\"Offline\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect width=\"16\" height=\"16\" x=\"4\" y=\"4\" rx=\"2\"/><rect width=\"6\" height=\"6\" x=\"9\" y=\"9\" rx=\"1\"/><path d=\"M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2\"/></svg></span></span>",
+      "css": ".ds-keys { display: inline-flex; gap: 12px; } .ds-key { width: 32px; height: 32px; border-radius: 50%; color: #1C1C1E; display: inline-grid; place-items: center; } .ds-key svg { width: 18px; height: 18px; }"
     },
     {
       "name": "Key-cap",
-      "kind": "chip",
+      "kind": "custom",
       "refersTo": "keycap",
-      "description": "The agent's RFC 2119 keyword, inline in prose.",
-      "html": "<p class=\"ds-prose\">Failed uploads <span class=\"ds-cap\">MUST</span> be kept in the queue.</p>",
-      "css": ".ds-prose { font-family: Manrope, sans-serif; font-size: 16px; line-height: 1.55; color: #1C1C1E; } .ds-cap { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; background: #1C1C1E; color: #F4F4F2; font-weight: 600; font-size: 12.8px; border-radius: 4px; padding: 1px 5px; }"
+      "description": "The agent's RFC 2119 keywords inline in spec prose: ink fill, sheet text, mono 600 at 80% of prose size, 4px radius.",
+      "html": "<p class=\"ds-prose\">Failed uploads <span class=\"ds-cap\">MUST</span> stay in the queue and <span class=\"ds-cap\">SHOULD</span> retry with backoff.</p>",
+      "css": ".ds-prose { font-family: Manrope, sans-serif; font-size: 16px; line-height: 1.55; color: #1C1C1E; max-width: 680px; margin: 0; } .ds-cap { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; background: #1C1C1E; color: #F4F4F2; font-weight: 600; font-size: 12.8px; border-radius: 4px; padding: 1px 5px; }"
     }
   ],
   "narrative": {
     "northStar": "The Pocket Synth",
-    "overview": "**Creative North Star: \"The Pocket Synth\"**\n\nEvery worker and every refinement run is a small instrument. The app is a light anodized shell (graphite in the dark edition) carrying round colour keys and, where something is live or worth a glance, one black screen strip on which Lucide line glyphs sit over tiny lowercase labels and mono readouts. State is read first as colour and motion, then as words; words drop to the smallest size that still reads.\n\nThe shell is flat and quiet. Depth comes from three neutral fields (shell, sheet, side field) separated by one-pixel seams, never from shadow. Prose (briefs, spec sections) stays plain readable Manrope at a 680px measure, with the agent's RFC 2119 keywords set as dark key-caps. Orange is scarce on purpose: it marks only what is running right now or waiting on the person.\n\nMotion has one grammar. Glyphs are still by default, loop only while work runs, play once when a state arrives, and freeze entirely under reduced motion. Light and dark both ship and follow the system setting.",
+    "overview": "Every worker and every refinement run is a small instrument. The app is a light anodized shell (graphite in the dark edition) carrying round colour keys and, where something is live or worth a glance, one black screen strip on which Lucide line glyphs sit over tiny lowercase labels and mono readouts. State is read first as colour and motion, then as words; words drop to the smallest size that still reads.\n\nThe shell is flat and quiet. Depth comes from three neutral fields (shell, sheet, side field) separated by one-pixel seams, never from shadow. Prose (briefs, spec sections) stays plain readable Manrope at a 680px measure, with the agent's RFC 2119 keywords set as dark key-caps. Orange is scarce on purpose: it marks only what is running right now or waiting on the person.\n\nMotion has one grammar. Glyphs are still by default, loop only while work runs, play once when a state arrives, and freeze entirely under reduced motion. Light and dark both ship and follow the system setting.",
     "keyCharacteristics": [
       "Neutral anodized shell, three tonal fields, hairline seams, no shadows, gradients or glass.",
       "Colour-coded round keys: orange live, green online/verified, blue evidence, grey idle.",

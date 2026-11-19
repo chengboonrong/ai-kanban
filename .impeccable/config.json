@@ -49,5 +49,6 @@
         "reason": "Claude: direction sketch for a replacement world; DESIGN.md is being replaced, so its fonts do not bind sketches"
       }
     ]
-  }
+  },
+  "buildPath": "code"
 }
