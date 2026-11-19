@@ -2,8 +2,10 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { randomBytes } from 'node:crypto';
 import type pg from 'pg';
-import { httpError, sha256, tx } from './db.ts';
+import { httpError, rateLimit, sha256, tx } from './db.ts';
 import { type GitHubClient, GitHubError } from './github.ts';
+import { registerInviteRoutes } from './invites.ts';
+import type { Mailer } from './mail.ts';
 import { registerRefinementRoutes } from './refinement.ts';
 import { registerRoutes } from './routes.ts';
 import { gitHubFailed, registerGitHubRoutes, requireWriteAccess } from './sync.ts';
@@ -32,9 +34,12 @@ export interface AppOptions {
    * repository actions on write access. Anything else: no sign-in route.
    */
   authMode: string;
-  logger?: boolean;
+  /** true logs to stdout; tests pass a stream to read what would be logged. */
+  logger?: boolean | { stream: { write(line: string): void } };
   /** The GitHub App's client, shared with the sync loop (one rate-limit pause, one token cache); routes that call GitHub answer 503 without it. */
   github?: GitHubClient;
+  /** Sends invite emails; without one, AUTH_MODE=github refuses invites (503) and AUTH_MODE=dev logs the link. */
+  mailer?: Mailer;
 }
 
 const bearer = (header = '') => /^Bearer (\S+)$/.exec(header)?.[1];
@@ -54,32 +59,6 @@ const START_AGAIN: Record<string, string> = {
   incorrect_device_code: 'GitHub does not know this code; start again',
 };
 
-const tooMany = (wait: number) =>
-  Object.assign(httpError(429, `Too many requests; try again in ${wait} s`), { headers: { 'retry-after': String(wait) } });
-
-/**
- * A fixed-window limit: at most `max` calls a minute per key, else 429 with retry-after. Expired keys are dropped at most
- * once a minute; past 100,000 live keys new ones are refused (fails closed rather than growing without bound).
- * ponytail: in memory, per process; move it to a shared store if the API ever runs as more than one instance.
- */
-function rateLimit(max: number) {
-  const windows = new Map<string, { count: number; resetAt: number }>();
-  let cleaned = 0;
-  return (key: string) => {
-    const now = Date.now();
-    if (windows.size > 10_000 && now - cleaned >= 60_000) {
-      cleaned = now;
-      for (const [k, w] of windows) if (w.resetAt <= now) windows.delete(k);
-    }
-    let w = windows.get(key);
-    if (!w || w.resetAt <= now) {
-      if (!w && windows.size >= 100_000) throw tooMany(60);
-      windows.set(key, (w = { count: 0, resetAt: now + 60_000 }));
-    }
-    if (++w.count > max) throw tooMany(Math.ceil((w.resetAt - now) / 1000));
-  };
-}
-
 /**
  * TRUST_PROXY: the proxies' addresses/CIDRs, comma-separated (`127.0.0.1` for cloudflared on this host); unset, req.ip
  * is the socket's. Never `true` or a hop count: a client could then name its own IP (or add the trusted hop itself).
@@ -90,7 +69,7 @@ function trustProxy(v = process.env.TRUST_PROXY): string | false {
   return v;
 }
 
-export async function buildApp({ pool, authMode, logger = false, github }: AppOptions) {
+export async function buildApp({ pool, authMode, logger = false, github, mailer }: AppOptions) {
   if (authMode === 'dev' && process.env.NODE_ENV === 'production') {
     throw new Error('AUTH_MODE=dev is refused when NODE_ENV=production');
   }
@@ -212,6 +191,11 @@ export async function buildApp({ pool, authMode, logger = false, github }: AppOp
         if (typeof t.access_token !== 'string') throw new GitHubError(502, `GitHub refused the sign-in: ${t.error ?? 'no token'}`, false);
         // The token is used once, to learn who this is, and dropped: access checks use the app's own token.
         const me = await gh.user(t.access_token);
+        // 403/404: an install that hasn't granted the Email addresses permission yet; sign-in works, invites can't be accepted.
+        const emails = await gh.emails(t.access_token).catch((e) => {
+          if (e instanceof GitHubError && !e.retryable && (e.status === 403 || e.status === 404)) return [];
+          throw e;
+        });
         const login = me.login.toLowerCase();
         return tx(pool, async (c) => {
           // Whoever else holds this login moves aside: an account renamed on GitHub, or a dev account. A dev account is
@@ -223,6 +207,9 @@ export async function buildApp({ pool, authMode, logger = false, github }: AppOp
              RETURNING id, login, display_name AS "displayName"`,
             [login, me.name || me.login, me.id],
           );
+          // What accepting an invite is checked against.
+          await c.query('DELETE FROM user_emails WHERE user_id = $1', [user.id]);
+          await c.query('INSERT INTO user_emails (user_id, email) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING', [user.id, emails]);
           return { token: await newSession(c, user.id), user };
         });
       },
@@ -240,6 +227,7 @@ export async function buildApp({ pool, authMode, logger = false, github }: AppOp
   });
 
   registerRoutes(app, pool);
+  registerInviteRoutes(app, pool, { authMode, mailer });
   registerRefinementRoutes(app, pool);
   registerGitHubRoutes(app, pool, github);
   return app;

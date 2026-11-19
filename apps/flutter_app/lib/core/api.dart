@@ -148,6 +148,47 @@ class Api {
   Future<void> createWorkspace(String name) =>
       _dio.post('/workspaces', data: {'name': name});
 
+  /// Owner first, then by login.
+  Future<List<Member>> members(String workspaceId) async => [
+    for (final m in (await _dio.get('/workspaces/$workspaceId/members')).data)
+      Member.fromJson(m),
+  ];
+
+  /// Owner only; [role] is admin or member.
+  Future<void> setMemberRole(String workspaceId, String userId, String role) =>
+      _dio.patch(
+        '/workspaces/$workspaceId/members/$userId',
+        data: {'role': role},
+      );
+
+  /// The owner removing someone, or a member leaving (their own [userId]).
+  Future<void> removeMember(String workspaceId, String userId) =>
+      _dio.delete('/workspaces/$workspaceId/members/$userId');
+
+  /// Pending invites, expired ones included; owners and admins only.
+  Future<List<Invite>> invites(String workspaceId) async => [
+    for (final i in (await _dio.get('/workspaces/$workspaceId/invites')).data)
+      Invite.fromJson(i),
+  ];
+
+  /// Emails a link; inviting an address that already has a pending invite resends it.
+  Future<void> invite(String workspaceId, String email) =>
+      _dio.post('/workspaces/$workspaceId/invites', data: {'email': email});
+
+  /// A new link and expiry; the old link stops working.
+  Future<void> resendInvite(String workspaceId, String inviteId) =>
+      _dio.post('/workspaces/$workspaceId/invites/$inviteId/resend');
+
+  Future<void> revokeInvite(String workspaceId, String inviteId) =>
+      _dio.delete('/workspaces/$workspaceId/invites/$inviteId');
+
+  /// Joins the invite's workspace and returns its name; 403 when the invite was sent to another address (code
+  /// `sign_in_again` when the server has no email addresses to check), 404 when it expired or was used.
+  Future<String> acceptInvite(String token) async =>
+      // In the body, not the path, so the token stays out of request logs.
+      (await _dio.post('/invites/accept', data: {'token': token})).data['name']
+          as String;
+
   Future<Board> createBoard(String workspaceId, String name) async =>
       Board.fromJson(
         (await _dio.post(

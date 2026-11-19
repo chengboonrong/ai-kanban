@@ -12,6 +12,7 @@ import '../../core/widgets.dart';
 import '../agents/workers.dart';
 import '../auth/auth.dart';
 import '../tasks/outbox.dart';
+import 'members.dart';
 
 // autoDispose: the list lives only while the home screen shows it, so it can't outlive the session that loaded it.
 // Refreshed every 15 s so the ready-for-review count follows runs finishing on any worker, a teammate's too.
@@ -72,6 +73,20 @@ class HomePage extends ConsumerWidget {
         ref.invalidate(workspacesProvider);
         if (context.mounted) context.go('/boards/${board.id}');
       });
+    }
+
+    Future<void> join() async {
+      final link = await promptText(
+        context,
+        'Paste the invite link',
+        action: 'Join',
+      );
+      if (link == null || !context.mounted) return;
+      final token = inviteToken(link);
+      if (token != null) return context.go('/invite/$token');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That is not an invite link')),
+      );
     }
 
     final theme = Theme.of(context);
@@ -219,6 +234,14 @@ class HomePage extends ConsumerWidget {
                   ),
                 ),
             ],
+            const SizedBox(height: 32),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: join,
+                child: const Text('Join with invite link…'),
+              ),
+            ),
           ],
         ),
         AsyncValue(:final error?) => ListView(

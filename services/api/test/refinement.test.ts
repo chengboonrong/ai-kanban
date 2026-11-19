@@ -554,6 +554,21 @@ test('a board whose connector is gone says so: no worker can take its runs', asy
   assert.deepEqual((await api('GET', `/boards/${board.id}`)).json().waiting, expected);
 });
 
+test('a board whose connector was removed from the workspace says so', async () => {
+  const owner = await user();
+  const ws = (await owner('POST', '/workspaces', { name: 'Acme' })).json();
+  const board = (await owner('POST', `/workspaces/${ws.id}/boards`, { name: 'Roadmap' })).json();
+  const connector = await user();
+  const me = (await connector('GET', '/me')).json();
+  await pool.query(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'member')`, [ws.id, me.id]);
+  await connector('PATCH', `/boards/${board.id}`, { repository: `acme/repo-${randomUUID().slice(0, 8)}` });
+  const task = (await owner('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' })).json();
+  assert.equal((await owner('DELETE', `/workspaces/${ws.id}/members/${me.id}`)).statusCode, 204);
+  const expected = { reason: 'connector_left', connector: me.login };
+  assert.deepEqual((await owner('GET', `/tasks/${task.id}/refinement`)).json().waiting, expected);
+  assert.deepEqual((await owner('GET', `/boards/${board.id}`)).json().waiting, expected);
+});
+
 test('handing a spec in again after a lost answer returns it; nobody else can', async () => {
   const { api, board, repository, worker } = await fixture();
   const other = await registerWorker(api);

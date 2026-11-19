@@ -164,6 +164,11 @@ export function gitHubClient(config: GitHubConfig) {
       web('/login/oauth/access_token', { device_code: deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }),
     /** The user a (one-shot) user token belongs to. */
     user: (token: string) => call('GET', '/user', token, undefined, { shared: false }) as Promise<{ id: number; login: string; name: string | null }>,
+    /** The token's user's verified addresses, lowercased (the app's "Email addresses" account permission). */
+    async emails(token: string) {
+      const list = (await call('GET', '/user/emails?per_page=100', token, undefined, { shared: false })) as { email: string; verified: boolean }[];
+      return list.filter((e) => e.verified).map((e) => e.email.toLowerCase());
+    },
     /** The app's id and slug: issues it creates carry performed_via_github_app.id and the author `<slug>[bot]`. */
     async app(repository: string) {
       const { appId, appSlug } = await installation(repository);

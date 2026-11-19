@@ -180,5 +180,7 @@ To regenerate the screenshots and demo in `docs/media`, keep the API running and
 `NODE_ENV=production`. `AUTH_MODE=github` signs in with GitHub instead (Device Flow: the app shows a code to enter at
 github.com/login/device) and needs the GitHub App configured. Dev accounts don't carry over: their sessions and
 workers stop working, and a GitHub account with the same login starts fresh. No GitHub token is kept: it is used once to learn who you are. To serve
-the web build from another origin, list it in `CORS_ORIGINS` (comma-separated). The app reaches the API at `http://localhost:8080`; override
+the web build from another origin, list it in `CORS_ORIGINS` (comma-separated). Team invites are emailed when
+`RESEND_API_KEY` and `MAIL_FROM` are set, with links to `APP_URL` (default `http://localhost:3000`); see
+[docs/setup/github-app.md](docs/setup/github-app.md). The app reaches the API at `http://localhost:8080`; override
 with `--dart-define=API_URL=...` (an Android emulator needs `http://10.0.2.2:8080`). The Flutter build contains no secrets.

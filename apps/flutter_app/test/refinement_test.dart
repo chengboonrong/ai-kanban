@@ -192,6 +192,10 @@ void main() {
         'no_connector',
         'Connect the repository again on this board to have it refined',
       ),
+      (
+        'connector_left',
+        'ann left this workspace; connect the repository again on this board to have it refined',
+      ),
     ]) {
       testWidgets(reason, (tester) async {
         await _pumpPanel(tester, _queued(reason));
@@ -268,6 +272,12 @@ void main() {
         'no_connector',
         'Connect the repository again on this board to have it refined',
       ),
+      // Their workers no longer take the board's runs, so no way to the Workers page.
+      (
+        'ann',
+        'connector_left',
+        'ann left this workspace; connect the repository again on this board to have it refined',
+      ),
     ]) {
       testWidgets('$reason to $viewer', (tester) async {
         final api = _FakeApi([_queued(reason)], boardWaiting: _waiting(reason));
@@ -276,7 +286,7 @@ void main() {
         expect(find.text('Waiting for a worker'), findsNothing);
         expect(
           find.text('Workers'),
-          viewer == 'ann' && reason != 'no_connector'
+          viewer == 'ann' && reason == 'repository_not_listed'
               ? findsOneWidget
               : findsNothing,
         );

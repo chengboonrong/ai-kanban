@@ -7,6 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { createPool } from '../src/db.ts';
+import type { Mailer } from '../src/mail.ts';
 import { type GitHubClient, type GitHubConfig, type GitHubError, gitHubClient, validSignature } from '../src/github.ts';
 import { migrate } from '../src/migrate.ts';
 import { pairWorker } from './helpers.ts';
@@ -33,6 +34,8 @@ const repos = new Map<string, FakeRepo>();
 // Device Flow: each device code's answers to the token poll, in order (the last one repeats); the user each token belongs to.
 const devices = new Map<string, object[]>();
 const tokenUsers = new Map<string, { id: number; login: string; name: string | null }>();
+// GET /user/emails per token; a token without an entry gets the 403 of an app lacking the Email addresses permission.
+const tokenEmails = new Map<string, { email: string; verified: boolean }[]>();
 const calls: string[] = [];
 let commentIds = 0;
 
@@ -77,6 +80,10 @@ const fake = createServer(async (req, res) => {
     }
     const me = tokenUsers.get(req.headers.authorization?.replace('Bearer ', '') ?? '');
     return me ? send(200, me) : send(401, { message: 'Bad credentials' });
+  }
+  if (url.pathname === '/user/emails') {
+    const emails = tokenEmails.get(req.headers.authorization?.replace('Bearer ', '') ?? '');
+    return emails ? send(200, emails) : send(403, { message: 'Resource not accessible by integration' });
   }
   if (url.pathname.startsWith('/app/installations/')) return send(201, { token: 'ghs_fake', expires_at: new Date(Date.now() + 3_600_000).toISOString() });
   const [, name, rest] =
@@ -856,9 +863,10 @@ const device = async () => {
 const poll = (deviceCode: string) =>
   ghApp.inject({ method: 'POST', url: '/auth/github/token', payload: { deviceCode }, remoteAddress: `10.0.${randomInt(256)}.${randomInt(256)}` });
 /** Signs in on ghApp as GitHub user `me`; returns the API's answer. */
-async function signIn(me: { id: number; login: string; name: string | null }) {
+async function signIn(me: { id: number; login: string; name: string | null }, emails?: { email: string; verified: boolean }[]) {
   const code = await device();
   tokenUsers.set(`gho_${code}`, me);
+  if (emails) tokenEmails.set(`gho_${code}`, emails);
   devices.set(code, [{ access_token: `gho_${code}`, token_type: 'bearer', scope: '' }]);
   const res = await poll(code);
   assert.equal(res.statusCode, 200, res.body);
@@ -1022,4 +1030,65 @@ test('TRUST_PROXY names the proxy: a client-supplied X-Forwarded-For entry does 
   assert.equal((await fromProxy('198.51.100.99, 10.3.3.3')).statusCode, 429, 'the proxy-added entry is the key');
   assert.equal((await fromProxy('10.3.3.3, 10.3.3.4')).statusCode, 200, 'another client');
   await proxied.close();
+});
+
+// ---- Invites with AUTH_MODE=github: the invited address must be one of the user's verified GitHub emails ----
+
+test('sign-in stores the verified addresses, lowercased, replacing the last ones; without the permission it still signs in', async () => {
+  const me = ghUser(`gh-${randomUUID().slice(0, 8)}`);
+  const stored = async (userId: string) => (await pool.query('SELECT email FROM user_emails WHERE user_id = $1 ORDER BY email', [userId])).rows.map((r) => r.email);
+  const { user } = await signIn(me, [{ email: 'Mona@Example.com', verified: true }, { email: 'mona@example.com', verified: true }, { email: 'spare@example.com', verified: false }]);
+  assert.deepEqual(await stored(user.id), ['mona@example.com']);
+  await signIn(me, [{ email: 'mona@work.example', verified: true }]);
+  assert.deepEqual(await stored(user.id), ['mona@work.example']);
+  await signIn(me);
+  assert.deepEqual(await stored(user.id), [], 'no permission: signed in, nothing stored');
+});
+
+test('github mode: only the invited address joins; anyone else gets 403 with it masked; no mailer is 503', async () => {
+  const sent: Parameters<Mailer['sendInvite']>[0][] = [];
+  const mailApp = await buildApp({ pool, authMode: 'github', github: gh, mailer: { sendInvite: async (m) => void sent.push(m) } });
+  try {
+    const owner = as((await signIn(ghUser(`gh-${randomUUID().slice(0, 8)}`))).token, mailApp);
+    const ws = (await owner('POST', '/workspaces', { name: 'Acme' })).json();
+    const board = (await owner('POST', `/workspaces/${ws.id}/boards`, { name: 'Roadmap' })).json();
+    const email = `jo-${randomUUID().slice(0, 8)}@example.com`;
+    assert.equal((await owner('POST', `/workspaces/${ws.id}/invites`, { email })).statusCode, 201);
+    const token = sent.at(-1)!.link.split('/#/invite/')[1];
+
+    const other = as((await signIn(ghUser(`gh-${randomUUID().slice(0, 8)}`), [{ email: 'someone@example.com', verified: true }, { email, verified: false }])).token, mailApp);
+    const refused = await other('POST', '/invites/accept', { token });
+    assert.deepEqual([refused.statusCode, refused.json().message], [403, 'This invite was sent to j***@example.com']);
+    assert.equal((await other('GET', `/boards/${board.id}`)).statusCode, 404, 'not added');
+
+    const jo = as((await signIn(ghUser(`gh-${randomUUID().slice(0, 8)}`), [{ email: email.toUpperCase(), verified: true }])).token, mailApp);
+    const joined = await jo('POST', '/invites/accept', { token });
+    assert.deepEqual([joined.statusCode, joined.json()], [200, { workspaceId: ws.id, name: 'Acme' }]);
+    const home = (await jo('GET', '/workspaces')).json();
+    assert.deepEqual([home[0].id, home[0].role, home[0].boards[0].id], [ws.id, 'member', board.id], "the workspace's boards on the home screen");
+    assert.equal((await jo('POST', '/invites/accept', { token })).statusCode, 200, 'again: a no-op');
+    assert.equal((await other('POST', '/invites/accept', { token })).statusCode, 404, 'used');
+
+    // A member opening someone else's pending invite is refused too, and the invite stays pending for its addressee.
+    const kim = `kim-${randomUUID().slice(0, 8)}@example.com`;
+    const pending = (await owner('POST', `/workspaces/${ws.id}/invites`, { email: kim })).json();
+    const kimToken = sent.at(-1)!.link.split('/#/invite/')[1];
+    const notJos = await jo('POST', '/invites/accept', { token: kimToken });
+    assert.deepEqual([notJos.statusCode, notJos.json().message], [403, 'This invite was sent to k***@example.com']);
+    assert.ok((await owner('GET', `/workspaces/${ws.id}/invites`)).json().some((i: { id: string }) => i.id === pending.id));
+
+    // No stored addresses at all (signed in before this check, or without the permission): asked to sign in again.
+    const unknown = as((await signIn(ghUser(`gh-${randomUUID().slice(0, 8)}`))).token, mailApp);
+    const again = await unknown('POST', '/invites/accept', { token: kimToken });
+    assert.deepEqual([again.statusCode, again.json().code, again.json().message], [403, 'sign_in_again', 'Sign in again so we can check your GitHub email addresses']);
+
+    // Without mail settings, github mode refuses to invite rather than storing an address it can't email.
+    const plain = as((await signIn(ghUser(`gh-${randomUUID().slice(0, 8)}`))).token, ghApp);
+    const own = (await plain('POST', '/workspaces', { name: 'Solo' })).json();
+    const refusedInvite = await plain('POST', `/workspaces/${own.id}/invites`, { email: 'pat@example.com' });
+    assert.deepEqual([refusedInvite.statusCode, refusedInvite.json().message], [503, 'Email is not configured']);
+    assert.deepEqual((await plain('GET', `/workspaces/${own.id}/invites`)).json(), []);
+  } finally {
+    await mailApp.close();
+  }
 });

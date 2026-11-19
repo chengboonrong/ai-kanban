@@ -23,6 +23,7 @@ enum Glyph {
   board,
   worker,
   workerOff,
+  members,
   offline,
   outbox,
   waiting,
@@ -235,6 +236,14 @@ Widget _icon(
       controller: c,
     ),
     Glyph.worker => CpuIcon(
+      size: size,
+      color: color,
+      strokeWidth: stroke,
+      animationDuration: d,
+      interactive: false,
+      controller: c,
+    ),
+    Glyph.members => CircleUserIcon(
       size: size,
       color: color,
       strokeWidth: stroke,
