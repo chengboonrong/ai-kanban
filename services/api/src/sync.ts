@@ -82,10 +82,32 @@ const notConfigured = (reply: FastifyReply) =>
  * A GitHub failure as the answer: its message names a repository or a status, never a credential. Sent rather than
  * thrown, as the app's error handler hides the message of any 5xx it catches.
  */
-function gitHubFailed(reply: FastifyReply, e: unknown) {
+export function gitHubFailed(reply: FastifyReply, e: unknown) {
   if (!(e instanceof GitHubError)) throw e;
   const statusCode = e.retryable ? 503 : 502;
   return reply.code(statusCode).send({ statusCode, error: e.retryable ? 'Service Unavailable' : 'Bad Gateway', message: e.message });
+}
+
+/**
+ * AUTH_MODE=github: the user may act on `repository` through the app only with write (or admin) access on GitHub, asked
+ * with the installation's token, so no user token is kept. Call it before any transaction: it calls GitHub.
+ */
+export async function requireWriteAccess(pool: pg.Pool, gh: GitHubClient, userId: string, repository: string) {
+  const { rows: [user] } = await pool.query('SELECT login, github_id FROM users WHERE id = $1', [userId]);
+  // One answer for both, so it doesn't tell which repositories have the app.
+  const denied = httpError(403, `You need write access to ${repository} on GitHub, with the GitHub App installed there`);
+  if (!user?.github_id) throw denied; // a dev account
+  await gh.app(repository).catch((e) => {
+    throw e instanceof GitHubError && e.status === 404 ? denied : e; // the app isn't installed there
+  });
+  const access = await gh
+    .request<{ permission: string; user?: { id: number } }>(repository, 'GET', `/repos/${repository}/collaborators/${encodeURIComponent(user.login)}/permission`)
+    .catch((e) => {
+      if (e instanceof GitHubError && e.status === 404) return undefined;
+      throw e;
+    });
+  // maintain reads as write here; a login renamed on GitHub may belong to someone else now, so the id must match too.
+  if (!access || String(access.user?.id) !== user.github_id || !['admin', 'write'].includes(access.permission)) throw denied;
 }
 
 const PER_PAGE = 50;
@@ -108,6 +130,12 @@ export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool, gh?: G
   app.post('/tasks/:id/github/retry', { schema: { params: idParams } }, async (req) => {
     const { id } = req.params as Id;
     const boardId = await boardFor(pool, req.userId, 'task', id);
+    const { rows: [latest] } = await pool.query(
+      `SELECT r.repository FROM specs s JOIN agent_runs r ON r.id = s.run_id
+       WHERE s.task_id = $1 AND s.approved_at IS NOT NULL ORDER BY s.version DESC LIMIT 1`,
+      [id],
+    );
+    if (latest) await app.requireWrite(req.userId, latest.repository);
     await tx(pool, async (c) => {
       // Same lock order as approval: board (repository held still), then task.
       const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1 FOR SHARE', [boardId]);
@@ -121,6 +149,7 @@ export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool, gh?: G
         [id],
       );
       if (!spec) throw httpError(409, 'approve a spec first');
+      if (spec.repository !== latest?.repository) throw httpError(409, 'a newer spec was approved meanwhile; try again'); // not the one checked
       if (board.repository !== spec.repository) {
         throw httpError(409, `the board now points at ${board.repository ?? 'no repository'}; refine again`);
       }
@@ -132,6 +161,9 @@ export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool, gh?: G
   app.post('/tasks/:id/github/comment/retry', { schema: { params: idParams } }, async (req) => {
     const { id } = req.params as Id;
     await boardFor(pool, req.userId, 'task', id);
+    // The comment goes on the imported issue, in its repository.
+    const { rows: [issue] } = await pool.query('SELECT repository FROM github_issues WHERE task_id = $1', [id]);
+    if (issue) await app.requireWrite(req.userId, issue.repository);
     // Only a failed comment is queued again; attempts are kept, as they fence a straggling attempt.
     const { rowCount } = await pool.query(
       `UPDATE github_comments SET state = 'pending', next_attempt_at = now(), last_error = NULL, updated_at = now()
@@ -156,6 +188,7 @@ export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool, gh?: G
       const boardId = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
       const { page } = req.query as { page: number };
       const repository = await boardRepository(pool, boardId);
+      await app.requireWrite(req.userId, repository);
       let repo: { id: number }, listed: Issue[];
       try {
         repo = await gh.request<{ id: number }>(repository, 'GET', `/repos/${repository}`);
@@ -189,6 +222,7 @@ export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool, gh?: G
     const boardId = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
     const { number } = req.body as { number: number };
     const repository = await boardRepository(pool, boardId);
+    await app.requireWrite(req.userId, repository);
     let repo: { id: number }, issue: Issue | undefined;
     try {
       // Reading the repository first surfaces a missing installation, so a 404 below means the issue.

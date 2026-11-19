@@ -29,6 +29,18 @@ final apiProvider = Provider<Api>((ref) {
   );
 });
 
+class GithubDevice {
+  const GithubDevice({
+    required this.deviceCode,
+    required this.userCode,
+    required this.verificationUri,
+    required this.interval,
+    required this.expiresIn,
+  });
+  final String deviceCode, userCode, verificationUri;
+  final int interval, expiresIn; // seconds
+}
+
 class Api {
   Api(this._dio, {this.cache});
 
@@ -78,6 +90,52 @@ class Api {
     (await _dio.post('/auth/dev-login', data: {'login': login})).data,
   );
   Future<void> logout() => _dio.post('/auth/logout');
+
+  /// How the server signs people in: 'dev', 'github' or 'none'.
+  Future<String> health() async =>
+      (await _dio.get('/health')).data['auth'] as String;
+
+  Future<GithubDevice> githubDevice() async {
+    final d = (await _dio.post('/auth/github/device')).data;
+    return GithubDevice(
+      deviceCode: d['deviceCode'],
+      userCode: d['userCode'],
+      verificationUri: d['verificationUri'],
+      interval: d['interval'],
+      expiresIn: d['expiresIn'],
+    );
+  }
+
+  /// One poll. `session` when signed in; `failed` is the message to show when the code expired or was denied (start
+  /// again); otherwise still pending, so ask again after `interval` seconds.
+  Future<({Session? session, int interval, String? failed})> githubToken(
+    String deviceCode,
+    int interval,
+  ) async {
+    try {
+      final r = await _dio.post(
+        '/auth/github/token',
+        data: {'deviceCode': deviceCode},
+      );
+      if (r.statusCode == 202) {
+        return (
+          session: null,
+          interval: r.data['interval'] as int,
+          failed: null,
+        );
+      }
+      return (
+        session: Session.fromJson(r.data),
+        interval: interval,
+        failed: null,
+      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 400) {
+        return (session: null, interval: interval, failed: errorMessage(e));
+      }
+      rethrow;
+    }
+  }
 
   Future<({List<Workspace> items, bool offline})> workspaces() async {
     final (data, offline) = await _getCached('/workspaces');

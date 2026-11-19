@@ -249,6 +249,7 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
     const boardId = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
     const patch = req.body as { name?: string; repository?: string | null };
     const repository = patch.repository?.toLowerCase() ?? null; // GitHub names are case-insensitive
+    if (repository) await app.requireWrite(req.userId, repository); // also: is the app installed there?
     return tx(pool, async (c) => {
       const { rows } = await c.query(
         `UPDATE boards SET name = COALESCE($2, name), repository = CASE WHEN $3 THEN $4 ELSE repository END,

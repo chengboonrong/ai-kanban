@@ -162,9 +162,10 @@ Approving a spec queues one GitHub issue, filed by a GitHub App from the spec. P
 or linked in the PR's Development sidebar, which shows with the PR's next update) or whose branch in the repository
 starts with `12-` show on the card and the task page with GitHub's review decision and CI status. Register a development app and a webhook tunnel with
 [docs/setup/github-app.md](docs/setup/github-app.md); without it the API logs `GitHub sync off` and issues stay
-queued. Webhooks arrive on a separate port (8081) so the tunnel exposes nothing else. Until sign-in with GitHub
-checks access, keep the API on localhost: anyone who can reach it could file issues in any repository the app is
-installed on, and also read the open issues of any such repository (and import their bodies) by pointing a board at it.
+queued. Webhooks arrive on a separate port (8081) so the tunnel exposes nothing else. With `AUTH_MODE=github`,
+pointing a board at a repository, listing or importing its issues, approving a spec into it and retrying a filing all
+need write access to that repository on GitHub. In `AUTH_MODE=dev` none of that is checked, so keep a dev API on
+localhost.
 
 **Import GitHub issue** (the board's repository menu) lists the repository's open issues and makes a card from the one
 you pick; each issue can be a card on one board only. The card is refined like any other, and approving its spec posts
@@ -176,5 +177,8 @@ To regenerate the screenshots and demo in `docs/media`, keep the API running and
 `apps/flutter_app/tool/readme_media.sh` (macOS; drives the app with a `demo` account and needs ffmpeg).
 
 `npm run dev` starts the API with `AUTH_MODE=dev`: passwordless sign-in by login name, loopback only, refused when
-`NODE_ENV=production`. Real sign-in via GitHub replaces it. The app reaches the API at `http://localhost:8080`; override
+`NODE_ENV=production`. `AUTH_MODE=github` signs in with GitHub instead (Device Flow: the app shows a code to enter at
+github.com/login/device) and needs the GitHub App configured. Dev accounts don't carry over: their sessions and
+workers stop working, and a GitHub account with the same login starts fresh. No GitHub token is kept: it is used once to learn who you are. To serve
+the web build from another origin, list it in `CORS_ORIGINS` (comma-separated). The app reaches the API at `http://localhost:8080`; override
 with `--dart-define=API_URL=...` (an Android emulator needs `http://10.0.2.2:8080`). The Flutter build contains no secrets.

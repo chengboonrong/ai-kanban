@@ -166,8 +166,20 @@ than the last one applied.
 A PR links to a task when it closes the task's issue in the same repository or its branch (not a fork's) starts with
 `<number>-`; plain mentions don't link. The app refreshes the task page every 15 s and the board every 30 s while issues are queued
 or open; SSE comes later. Deferred: recovering webhooks missed while the receiver was unreachable (Milestone 6
-reconciliation), updating the issue when a later spec version is approved, and checking the app is installed when a
-repository is connected. Until sign-in with GitHub verifies who may use a repository, the API must stay on localhost.
+reconciliation) and updating the issue when a later spec version is approved.
+
+As built (Milestone 6, round 1): sign-in with GitHub uses the app's Device Flow (no client secret). The API exchanges
+the device code for a user token, reads `GET /user` once (id, login, name) and drops the token; users are keyed by
+GitHub id and a renamed login is followed. A dev account is never adopted (anyone could have signed in as that login
+in dev mode, and its login may be someone else's on GitHub): it is moved off the login, and in this mode only
+GitHub-linked accounts' sessions and workers are accepted. Access is checked with the
+app's installation token instead: `GET /repos/{repo}/collaborators/{login}/permission` (Metadata read), allowed for
+`admin` or `write` and only when the returned user id is the signed-in user's. The check runs before (never inside)
+the transaction of: connecting a board to a repository (a repository without the app gets the same 403, so the answer doesn't reveal
+where the app is installed),
+listing and importing its issues, approving a spec, and retrying an issue or comment. `AUTH_MODE=dev` skips it.
+A user's own rate-limited token doesn't pause the app's GitHub traffic. Deferred: session token in the Keychain (it is in app preferences), a sign-in allowlist, the triage role, rate limits
+on the public sign-in routes.
 
 ### Repository security
 
