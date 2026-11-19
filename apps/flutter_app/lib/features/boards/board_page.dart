@@ -232,8 +232,7 @@ class BoardPage extends ConsumerWidget {
                 if (board.offline)
                   const _Notice(
                     glyph: Glyph.offline,
-                    text:
-                        'Offline: showing the copy saved on this device. New tasks are sent when the connection is back.',
+                    text: 'Offline: showing the copy saved on this device. New tasks are sent when the connection is back.',
                   ),
                 for (final d in drafts.where((d) => d.error != null))
                   _Notice(

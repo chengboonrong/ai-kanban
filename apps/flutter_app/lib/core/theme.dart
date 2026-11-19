@@ -331,9 +331,8 @@ ThemeData buildTheme(Brightness brightness) {
           ),
     ),
     textButtonTheme: TextButtonThemeData(
-      style: base(
-        TextButton.styleFrom(foregroundColor: t.ink),
-      ).copyWith(side: focusRing),
+      style: base(TextButton.styleFrom(foregroundColor: t.ink))
+          .copyWith(side: focusRing),
     ),
     iconButtonTheme: IconButtonThemeData(
       style: IconButton.styleFrom(

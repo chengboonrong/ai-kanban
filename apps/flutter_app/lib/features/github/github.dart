@@ -28,9 +28,8 @@ Future<void> _open(BuildContext context, String url) async {
   if (uri == null || uri.scheme != 'https') return;
   final opened = await launchUrl(uri).catchError((_) => false);
   if (!opened && context.mounted) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text("Couldn't open $url")));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text("Couldn't open $url")));
   }
 }
 

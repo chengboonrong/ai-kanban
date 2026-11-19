@@ -101,9 +101,8 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
         .updateTask(task.id, title: title, description: _description.text);
     _refresh();
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Saved')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Saved')));
     }
   });
 

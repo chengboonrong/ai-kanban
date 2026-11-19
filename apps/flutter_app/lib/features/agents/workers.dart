@@ -285,8 +285,7 @@ class PairingDialog extends StatefulWidget {
 }
 
 class _PairingDialogState extends State<PairingDialog> {
-  Timer?
-  _copied; // while set, the copy button says it worked; a SnackBar would sit under the dialog's barrier
+  Timer? _copied; // while set, the copy button says it worked; a SnackBar would sit under the dialog's barrier
 
   @override
   void dispose() {
