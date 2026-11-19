@@ -7,26 +7,29 @@ related_targets: ["apps/flutter_app/lib/features/boards/board_page.dart","apps/f
 
 # AI Kanban app (whole Flutter app)
 
-Scope: every app screen (sign-in, workspaces, board, task with refinement and GitHub, workers). Mode: Operate. Replacement world for the earlier Furrow ruled-ledger theme.
+Scope: every app screen (sign-in, workspaces, board, task with refinement and GitHub, workers). Mode: Operate. Replacement world for the Internet-Draft theme (commit 0b0bb9d), which the user found too full of text.
 
 Audience and job: a solo developer first (small team next) who captures short tasks, often on a phone, then reviews at a desk what the agent found. The task that matters most is reviewing a spec's evidence and approving it into one GitHub issue.
 
-Constraints: keep every string, route, handler, key and test finder; do not edit tests. Light and dark both ship (system setting). Native controls only.
+User answers (2026-11-19): replace the world fully; animated icons replace text labels and metadata and animate only where something is live (run streaming, worker online/busy, verifying, CI, waiting), still elsewhere; spec prose stays readable text with icons, chips and visuals around it; icons come from an open-source set (at most one new package).
+
+Constraints: keep every string, route, handler, key and test finder; do not edit tests. Light and dark both ship (system setting). Native controls only. Respect reduced motion: loops stop, one-shots jump to their end.
 
 ## Direction contract
 
-THESIS: The spec is a standards document. Each screen reads like an Internet-Draft put to work: a header block that states what this is and at which commit, plain numbered references to the code, and one normative colour for the one act that matters. Refuses the grey issue tracker with an indigo accent, and the warm-paper ledger it replaces.
+THESIS: Every worker and run is a small instrument. State lives in colour-coded round keys and in a black screen strip where line-art glyphs animate while something is happening; words drop to tiny lowercase labels. Refuses the dark issue tracker with an indigo accent, and the text-heavy standards document it replaces.
 
-OWN-WORLD: White paper (#FFFFFF), ink #1A1A1A, warm grey rules #E9E7E3 and a #FAF9F7 side field; normative red #9A2A1F reserved for the primary action, the literal MUST/SHOULD/MAY words the agent wrote, and failures that need you; quiet green only for verified/approved/CI pass. Source Sans 3 for UI and prose, Source Code Pro for header blocks, paths, line ranges, commits and run lines. Square-ish 6px controls, hairline rules, no shadows, no cards in cards.
+OWN-WORLD: Light anodized shell #E6E6E3 with a #DADAD6 side field and #CFCFCB seams; ink #1C1C1E; black screen #111214 with #E9E9E6 glyphs. Keys: orange #FF5A1F reserved for live or awaiting-you (the run, Approve), blue #2F6BFF for evidence and reading, green #18C36B for online/verified/pass, grey #9AA0A6 for idle. Dark edition: graphite shell, same keys. Manrope for UI and prose (800 for titles), JetBrains Mono only for data (commits, paths, counts). Pill buttons and round keys, 14px screen radius, no shadows.
 
-STORY: The visitor sees at a glance what the spec is, which repository and commit it stands on, how ready it is, and what the agent read; checks the [E1]-style evidence references; approves with one red button, knowing it files one GitHub issue.
+STORY: The visitor sees the run's state as moving glyphs before reading a word, follows the lifecycle strip to "spec ready", reads plain prose with MUST/SHOULD as dark key-caps, checks evidence dots, and presses the orange Approve key knowing it files one GitHub issue.
 
-FIRST VIEWPORT: Task page, desktop: a 56px app bar with back and "board · owner/repo" (Workers stays where the product puts it: home, and the waiting-run line); left a spec column (~900px measure) with the title and column tag, the brief, then the mono header block between a 2px ink rule and a 1px ink rule (left: Repository and the tested run line "Version N · commit · refiner on worker"; right: Status, Readiness N%), then Summary, Requirements, Acceptance criteria, Open questions, Approach, Evidence as an [E1] reference list with verified/unverified marks; a bar pinned under the column carries Approve spec (red, primary) and Refine again; a 360px #FAF9F7 activity rail on the right, newest first, with a solid ink dot on the latest event. Board, home and workers share the bar, the rules and the header-block move (the board's header block names the repository and refinement counts).
+FIRST VIEWPORT: Task page, desktop: 56px bar with a round back key, board name and mono repo, a green worker key at right. Spec column (900px): 30px/800 title, muted brief, then the black screen strip of four cells (run with spinning arc, readiness dial, evidence count, refiner on worker), then the lifecycle strip (queued, claimed, reading, spec ready, approved) at one glyph scale on one baseline, then sections headed by small colour keys, evidence rows with status dots. Bar pinned below: orange pill Approve spec, outline Refine again. Right 360px side field: activity as rows of coloured rounded-square glyph keys.
 
-FORM: Internet-Draft / IETF RFC standards document, position 1 on the ordered list (chosen as IMPECCABLE'S PICK over the assigned Munich '72 programme). seed:9edb3df007981102. Translations from the sketch: criteria carry no [E] citations (the data does not link them); normative keywords are highlighted only where the agent wrote them; no section numbers.
+FORM: Pocket synthesizer and sampler product graphics, position 3 on the ordered list. seed:f4ea8bf355756e09. Raises: lifecycle strip at one fixed glyph scale (from Botanical Folio); run details revealed on card focus, the rest quiet (from Streaming Wall); orange reserved for what is live or awaiting you (from Orienteering Map); one motion grammar, 400ms with one small overshoot (from Zoo Guide Map).
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
 
 ## Unresolved
 
-- Board retry on load error, empty board and empty column prompts (carried over from the last review).
+- Animated icon set choice (research running).
+- Board retry on load error, empty board and empty column prompts (carried over).

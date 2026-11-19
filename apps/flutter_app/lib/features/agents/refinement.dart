@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
@@ -76,6 +77,21 @@ void _refresh(WidgetRef ref, String boardId, String taskId) {
   ref.invalidate(boardProvider(boardId));
 }
 
+/// The run's lifecycle stages, in order; [_stage] says where a refinement is on it.
+const _stages = ['queued', 'claimed', 'reading', 'spec ready', 'approved'];
+
+/// Where the refinement is on [_stages], or null when no stage fits (no run yet, or a failed one with no spec).
+/// An approved spec is past the last stage, so every key reads done.
+int? _stage(AgentRun? run, Spec? spec, RunProgress? progress) {
+  if (run != null && run.active) {
+    final state = progress?.state ?? run.state;
+    if (state == 'queued') return 0;
+    return (progress?.events.isEmpty ?? true) ? 1 : 2;
+  }
+  if (spec == null) return null;
+  return spec.approved ? _stages.length : 3;
+}
+
 /// The task's AI spec: follow a refinement live, then read the result. Its actions live in [RefinementBar].
 class RefinementPanel extends ConsumerWidget {
   const RefinementPanel({
@@ -95,10 +111,10 @@ class RefinementPanel extends ConsumerWidget {
     final r = async.value;
     final run = r?.run, spec = r?.spec;
     final quiet = theme.textTheme.bodyLarge?.copyWith(color: t.muted);
-    // With a spec, its header block opens the section; before one, a plain heading does.
+    // With a spec, the screen strip opens the section; before one, a plain heading does.
     final heading = Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text('AI spec', style: theme.textTheme.titleMedium),
+      padding: const EdgeInsets.only(bottom: 12),
+      child: KeyHeading('AI spec', glyph: Glyph.refine, color: t.ink),
     );
 
     if (repository == null) {
@@ -115,6 +131,9 @@ class RefinementPanel extends ConsumerWidget {
         ],
       );
     }
+    final active = run != null && run.active;
+    final progress = active ? ref.watch(runEventsProvider(run.id)).value : null;
+    final stage = _stage(run, spec, progress);
     return switch (async) {
       AsyncValue(:final error?) when r == null => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -128,13 +147,32 @@ class RefinementPanel extends ConsumerWidget {
       ),
       _ when r == null => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [heading, const LinearProgressIndicator(minHeight: 2)],
+        children: [
+          heading,
+          Align(
+            alignment: Alignment.centerLeft,
+            child: GlyphIcon(
+              Glyph.run,
+              size: 18,
+              color: t.accent,
+              motion: GlyphMotion.loop,
+              semanticLabel: 'Loading',
+            ),
+          ),
+        ],
       ),
       _ => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (spec == null) heading,
-          if (run != null && run.active)
+          if (spec != null || active)
+            _Screen(run: run, spec: spec, progress: progress),
+          if (stage != null) ...[
+            const SizedBox(height: 20),
+            LifecycleStrip(stages: _stages, current: stage, live: active),
+            const SizedBox(height: 24),
+          ],
+          if (active)
             _LiveRun(
               run: run,
               waiting: r.waiting,
@@ -147,7 +185,11 @@ class RefinementPanel extends ConsumerWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const StatusChip(label: 'Failed', tone: StatusTone.bad),
+                  const StatusChip(
+                    label: 'Failed',
+                    tone: StatusTone.bad,
+                    motion: GlyphMotion.once,
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -167,13 +209,7 @@ class RefinementPanel extends ConsumerWidget {
               ),
             ),
           if (spec != null)
-            _SpecView(
-              spec: spec,
-              repository: repository!,
-              stale: run != null && run.active,
-              // A succeeded run is the one that wrote the newest spec.
-              madeBy: run != null && run.state == 'succeeded' ? run : null,
-            )
+            _SpecView(spec: spec)
           else if (run == null)
             _measure(
               Text(
@@ -188,7 +224,116 @@ class RefinementPanel extends ConsumerWidget {
   }
 }
 
-/// The spec's actions, pinned under the spec column: approve (the page's one red act), refine, or cancel a run.
+/// The black screen strip over the spec: the run, readiness, evidence and the refiner, then the spec's status.
+class _Screen extends StatelessWidget {
+  const _Screen({
+    required this.run,
+    required this.spec,
+    required this.progress,
+  });
+  final AgentRun? run;
+  final Spec? spec;
+  final RunProgress? progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final t = context.tokens;
+    final run = this.run, spec = this.spec;
+    final active = run != null && run.active;
+    final state = progress?.state ?? run?.state;
+    // A succeeded run is the one that wrote the newest spec; a running one is at work now.
+    final refiner =
+        run != null && (state == 'running' || run.state == 'succeeded')
+        ? run
+        : null;
+    final verified = spec?.evidence.where((e) => e.verified).length ?? 0;
+    final stale = spec != null && active;
+    final cells = [
+      ScreenCell(
+        glyph: active
+            ? Glyph.run
+            : state == 'failed'
+            ? Glyph.failed
+            : spec != null
+            ? Glyph.verified
+            : Glyph.run,
+        label: 'run',
+        // The commit and harness live in the status line under the strip.
+        value: spec == null ? '$state' : 'v${spec.version}',
+        color: active
+            ? t.screenAccent
+            : state == 'failed'
+            ? t.screenMuted
+            : spec != null
+            ? t.screenGreen
+            : t.screenInk,
+        motion: active ? GlyphMotion.loop : GlyphMotion.still,
+      ),
+      if (spec != null) ...[
+        ScreenCell(
+          glyph: Glyph.check,
+          label: 'readiness',
+          value: '${spec.readiness}%',
+          dial: spec.readiness / 100,
+          color: t.screenGreen,
+        ),
+        ScreenCell(
+          glyph: Glyph.evidence,
+          label: 'evidence',
+          value: '${spec.evidence.length} · $verified verified',
+          color: t.screenBlue,
+        ),
+      ],
+      if (refiner != null)
+        ScreenCell(
+          glyph: Glyph.worker,
+          label: 'refiner',
+          value: refiner.workerName ?? refiner.harnessLabel,
+          color: active ? t.screenGreen : t.screenInk,
+        ),
+    ];
+
+    final (status, glyph, colour) = stale
+        ? ('Being rewritten', Glyph.refine, t.screenMuted)
+        : spec?.approved ?? false
+        ? ('Approved', Glyph.verified, t.screenGreen)
+        : ('Ready for review', Glyph.spec, t.screenAccent);
+    // The status is the strip's readout line, so each fact is said once, on the screen.
+    return ScreenStrip(
+      cells: cells,
+      footer: spec == null
+          ? null
+          : Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                GlyphIcon(
+                  glyph,
+                  size: 16,
+                  color: colour,
+                  motion: stale ? GlyphMotion.still : GlyphMotion.once,
+                ),
+                Text(
+                  status,
+                  style: theme.textTheme.labelLarge?.copyWith(color: colour),
+                ),
+                Text(
+                  'Version ${spec.version}${spec.commitSha == null ? '' : ' · commit ${_short(spec.commitSha)}'}'
+                  '${run == null || run.state != 'succeeded' ? '' : ' · ${run.harnessLabel}${_on(run)}'}'
+                  '${stale ? ' · a new version is being written' : ''}',
+                  style: t.mono(
+                    theme.textTheme.bodySmall!.copyWith(color: t.screenMuted),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+/// The spec's actions, pinned under the spec column: approve (the page's one orange act), refine, or cancel a run.
 class RefinementBar extends ConsumerWidget {
   const RefinementBar({
     super.key,
@@ -231,26 +376,29 @@ class RefinementBar extends ConsumerWidget {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           if (approvable)
-            FilledButton(
-              style: t.normative,
+            FilledButton.icon(
+              style: t.liveKey,
               onPressed: () => act(() => api.approveSpec(spec.id)),
-              child: const Text('Approve spec'),
+              icon: const GlyphIcon(Glyph.approve, size: 18),
+              label: const Text('Approve spec'),
             ),
           if (active)
-            OutlinedButton(
+            OutlinedButton.icon(
               onPressed: () => act(() => api.cancelRun(run.id)),
-              child: const Text('Cancel'),
+              icon: const GlyphIcon(Glyph.close, size: 18),
+              label: const Text('Cancel'),
             )
           else if (spec == null)
-            FilledButton(
-              style: t.normative,
+            FilledButton.icon(
               onPressed: refine,
-              child: const Text('Refine with AI'),
+              icon: const GlyphIcon(Glyph.refine, size: 18),
+              label: const Text('Refine with AI'),
             )
           else
-            OutlinedButton(
+            OutlinedButton.icon(
               onPressed: refine,
-              child: const Text('Refine again'),
+              icon: const GlyphIcon(Glyph.refine, size: 18),
+              label: const Text('Refine again'),
             ),
           if (approvable)
             Text(
@@ -276,19 +424,33 @@ final _normative = RegExp(
   r'\b(MUST NOT|SHALL NOT|SHOULD NOT|MUST|SHALL|SHOULD|MAY|REQUIRED)\b',
 );
 
-/// [text] with the RFC 2119 keywords the agent wrote set in normative red small caps. Adds none of its own.
+/// [text] with the RFC 2119 keywords the agent wrote set as dark key-caps. Adds none of its own.
 Text _withKeywords(String text, TextStyle style, Tokens t) {
-  final keyword = style.copyWith(
-    color: t.accent,
-    fontWeight: FontWeight.w700,
-    fontFeatures: const [FontFeature('c2sc')],
-    letterSpacing: 0.6,
+  final cap = t.mono(
+    style.copyWith(
+      color: t.paper2,
+      fontWeight: FontWeight.w600,
+      fontSize: (style.fontSize ?? 14) * 0.8,
+      height: 1.2,
+    ),
   );
-  final spans = <TextSpan>[];
+  final spans = <InlineSpan>[];
   var at = 0;
   for (final m in _normative.allMatches(text)) {
     if (m.start > at) spans.add(TextSpan(text: text.substring(at, m.start)));
-    spans.add(TextSpan(text: m[0], style: keyword));
+    spans.add(
+      WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(
+            color: t.ink,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(m[0]!, style: cap),
+        ),
+      ),
+    );
     at = m.end;
   }
   if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
@@ -326,6 +488,19 @@ class _LiveRun extends ConsumerWidget {
     _ => e.kind,
   };
 
+  /// Tools that only look at the checkout.
+  static const _reads = {'read', 'grep', 'glob', 'list', 'ls'};
+
+  /// The glyph and its colour for one event: reading files blue, a commit as GitHub, trouble red.
+  static (Glyph, Color) look(RunEvent e, Tokens t) => switch (e.kind) {
+    'inspecting' => (Glyph.github, t.ink2),
+    'model' => (Glyph.refine, t.ink2),
+    'model_failed' => (Glyph.error, t.danger),
+    'tool' when e.data['ok'] == false => (Glyph.failed, t.danger),
+    'tool' when _reads.contains(e.data['tool']) => (Glyph.reading, t.blue),
+    _ => (Glyph.activity, t.ink2),
+  };
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.listen(runEventsProvider(run.id), (previous, next) {
@@ -348,22 +523,27 @@ class _LiveRun extends ConsumerWidget {
     final line = t.mono(theme.textTheme.bodySmall!).copyWith(color: t.ink2);
     final viewer = ref.watch(authProvider)?.user.login;
     final queued = state == 'queued';
-    return Container(
-      margin: const EdgeInsets.only(bottom: 32),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: t.paper3,
-        borderRadius: BorderRadius.circular(Tokens.radiusCard),
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
               queued
-                  ? const StatusChip(label: 'Queued', tone: StatusTone.quiet)
-                  : const StatusChip(label: 'Running', tone: StatusTone.active),
-              const SizedBox(width: 12),
+                  ? GlyphIcon(
+                      Glyph.waiting,
+                      size: 18,
+                      color: t.muted,
+                      motion: GlyphMotion.loop,
+                    )
+                  : GlyphIcon(
+                      Glyph.worker,
+                      size: 18,
+                      color: t.green,
+                      motion: GlyphMotion.once,
+                    ),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   queued
@@ -381,29 +561,39 @@ class _LiveRun extends ConsumerWidget {
           ),
           if (run.attempt > 1)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: 4, left: 28),
               child: Text(
                 '${run.attempt >= 3 ? 'Last try' : 'Retrying'} (attempt ${run.attempt} of 3)${run.retryReason == null ? '' : ': ${run.retryReason}'}',
                 style: theme.textTheme.bodySmall,
               ),
             ),
-          if (!queued) ...[
-            const SizedBox(height: 12),
-            LinearProgressIndicator(
-              minHeight: 2,
-              color: t.ink,
-              backgroundColor: t.rule,
-            ),
-          ],
           if (events.isNotEmpty) const SizedBox(height: 8),
-          for (final e in events.reversed.take(8))
+          for (final (i, e) in events.reversed.take(8).indexed)
             Container(
               padding: const EdgeInsets.symmetric(vertical: 6),
               decoration: BoxDecoration(border: Border(top: t.hairline)),
-              child: Text(
-                describe(e),
-                style: line,
-                overflow: TextOverflow.ellipsis,
+              child: Row(
+                children: [
+                  switch (look(e, t)) {
+                    (final glyph, final colour) => GlyphIcon(
+                      glyph,
+                      size: 16,
+                      color: colour,
+                      // The newest step is the one under way.
+                      motion: i == 0 && state == 'running'
+                          ? GlyphMotion.loop
+                          : GlyphMotion.still,
+                    ),
+                  },
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      describe(e),
+                      style: line,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
             ),
         ],
@@ -412,18 +602,10 @@ class _LiveRun extends ConsumerWidget {
   }
 }
 
-/// The spec as a standards document: header block, then plain sections, then the evidence references.
+/// The spec: its title, then sections headed by colour keys, rows on hairlines, then the evidence.
 class _SpecView extends StatelessWidget {
-  const _SpecView({
-    required this.spec,
-    required this.repository,
-    required this.stale,
-    required this.madeBy,
-  });
+  const _SpecView({required this.spec});
   final Spec spec;
-  final String repository;
-  final bool stale;
-  final AgentRun? madeBy;
 
   @override
   Widget build(BuildContext context) {
@@ -431,143 +613,108 @@ class _SpecView extends StatelessWidget {
     final t = context.tokens;
     final text = theme.textTheme;
     final prose = text.bodyLarge!;
-    final head = t.mono(text.bodySmall!).copyWith(color: t.ink, height: 1.7);
     final ref = t.mono(text.bodyMedium!);
 
-    Widget heading(String title) => Padding(
-      padding: const EdgeInsets.only(top: 22, bottom: 2),
-      child: Text(title, style: text.titleMedium),
-    );
-    Widget row(Widget child, {required bool first}) => Container(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      decoration: BoxDecoration(border: first ? null : Border(top: t.hairline)),
+    Widget heading(String title, Glyph glyph, Color color, {Color? ink}) =>
+        Padding(
+          padding: const EdgeInsets.only(top: 24, bottom: 4),
+          child: KeyHeading(title, glyph: glyph, color: color, ink: ink),
+        );
+    Widget row(Widget child) => Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(border: Border(bottom: t.hairline)),
       child: _measure(child),
     );
     List<Widget> section(
       String title,
+      Glyph glyph,
+      Color color,
       List<String> items, {
+      Color? ink,
       bool numbered = false,
     }) => [
       if (items.isNotEmpty) ...[
-        heading(title),
+        heading(title, glyph, color, ink: ink),
         for (final (i, item) in items.indexed)
-          row(
-            _withKeywords('${numbered ? '${i + 1}.' : '•'} $item', prose, t),
-            first: i == 0,
-          ),
+          row(_withKeywords('${numbered ? '${i + 1}.' : '•'} $item', prose, t)),
       ],
     ];
-
-    final (status, statusColor) = stale
-        ? ('Being rewritten', t.muted)
-        : spec.approved
-        ? ('Approved', t.green)
-        : ('Ready for review', t.ink);
-    final left = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Repository: $repository', style: head),
-        Text(
-          'Version ${spec.version}${spec.commitSha == null ? '' : ' · commit ${_short(spec.commitSha)}'}'
-          '${madeBy == null ? '' : ' · ${madeBy!.harnessLabel}${_on(madeBy!)}'}'
-          '${stale ? ' · a new version is being written' : ''}',
-          style: head,
-        ),
-      ],
-    );
-    Widget right(CrossAxisAlignment align) => Column(
-      crossAxisAlignment: align,
-      children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Status: ', style: head),
-            Text(status, style: head.copyWith(color: statusColor)),
-          ],
-        ),
-        Text('Readiness: ${spec.readiness}%', style: head),
-        Text(
-          'Evidence: ${spec.evidence.length} · ${spec.evidence.where((e) => e.verified).length} verified',
-          style: head,
-        ),
-      ],
-    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            border: Border(top: t.headRule, bottom: t.inkRule),
-          ),
-          child: LayoutBuilder(
-            builder: (context, c) => c.maxWidth < 560
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [left, right(CrossAxisAlignment.start)],
-                  )
-                : Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: left),
-                      const SizedBox(width: 24),
-                      right(CrossAxisAlignment.end),
-                    ],
-                  ),
-          ),
-        ),
-        const SizedBox(height: 16),
         _measure(Text(spec.title, style: text.titleLarge)),
-        heading('Summary'),
+        heading('Summary', Glyph.spec, t.ink),
         Padding(
-          padding: const EdgeInsets.only(top: 6),
+          padding: const EdgeInsets.only(top: 4),
           child: _measure(_withKeywords(spec.summary, prose, t)),
         ),
-        ...section('Requirements', spec.requirements),
-        ...section('Acceptance criteria', spec.acceptanceCriteria),
-        ...section('Open questions', spec.ambiguities),
-        ...section('Suggested approach', spec.approach, numbered: true),
+        ...section('Requirements', Glyph.edit, t.ink, spec.requirements),
+        ...section(
+          'Acceptance criteria',
+          Glyph.check,
+          t.green,
+          spec.acceptanceCriteria,
+        ),
+        ...section(
+          'Open questions',
+          Glyph.error,
+          t.idle,
+          spec.ambiguities,
+          ink: t.ink,
+        ),
+        ...section(
+          'Suggested approach',
+          Glyph.next,
+          t.ink,
+          spec.approach,
+          numbered: true,
+        ),
         if (spec.evidence.isNotEmpty) ...[
-          heading('Evidence in the repository'),
+          heading('Evidence', Glyph.evidence, t.blue),
           for (final (i, e) in spec.evidence.indexed)
             row(
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Wrap(
-                    spacing: 12,
-                    crossAxisAlignment: WrapCrossAlignment.center,
+                  Row(
                     children: [
-                      Text('[E${i + 1}]', style: ref),
-                      Text('${e.path}:${e.startLine}-${e.endLine}', style: ref),
                       Tooltip(
                         message: e.verified
                             ? 'Found at these lines in the commit'
                             : 'Not found at these lines; check before relying on it',
-                        child: Text(
-                          e.verified ? 'verified' : 'unverified',
-                          style: e.verified
-                              ? ref.copyWith(color: t.green)
-                              : ref.copyWith(
-                                  color: t.muted,
-                                  decoration: TextDecoration.underline,
-                                  decorationStyle: TextDecorationStyle.dashed,
-                                  decorationColor: t.muted,
-                                ),
+                        child: GlyphIcon(
+                          e.verified ? Glyph.verified : Glyph.error,
+                          size: 16,
+                          color: e.verified ? t.green : t.idle,
+                          motion: e.verified
+                              ? GlyphMotion.once
+                              : GlyphMotion.still,
+                          semanticLabel: e.verified ? 'verified' : 'unverified',
                         ),
                       ),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          '${e.path}:${e.startLine}-${e.endLine}',
+                          style: ref,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text('[E${i + 1}]', style: ref.copyWith(color: t.muted)),
                     ],
                   ),
                   const SizedBox(height: 4),
-                  _withKeywords(
-                    e.note,
-                    text.bodyMedium!.copyWith(color: t.ink2),
-                    t,
+                  Padding(
+                    padding: const EdgeInsets.only(left: 26),
+                    child: _withKeywords(
+                      e.note,
+                      text.bodyMedium!.copyWith(color: t.ink2),
+                      t,
+                    ),
                   ),
                 ],
               ),
-              first: i == 0,
             ),
         ],
       ],

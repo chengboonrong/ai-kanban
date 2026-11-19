@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
@@ -98,13 +99,8 @@ class WorkersPage extends ConsumerWidget {
         AsyncValue(:final value?) => ListView(
           padding: EdgeInsets.fromLTRB(side, 24, side, 48),
           children: [
-            HeaderBlock(
-              lines: [
-                'Workers: ${value.length} · '
-                    'Online: ${value.where((w) => w.state == 'online').length} · '
-                    'Busy: ${value.where((w) => w.state == 'busy').length}',
-              ],
-            ),
+            _WorkersStrip(workers: value),
+            const SizedBox(height: 8),
             if (value.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 24),
@@ -120,6 +116,8 @@ class WorkersPage extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Row(
                     children: [
+                      _StateKey(worker: w),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -131,11 +129,7 @@ class WorkersPage extends ConsumerWidget {
                               children: [
                                 Text(
                                   w.name,
-                                  style: t.mono(
-                                    theme.textTheme.bodyLarge!.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
+                                  style: theme.textTheme.titleMedium,
                                 ),
                                 _StateChip(worker: w),
                               ],
@@ -155,7 +149,7 @@ class WorkersPage extends ConsumerWidget {
                       const SizedBox(width: 8),
                       IconButton(
                         tooltip: 'Remove ${w.name}',
-                        icon: const Icon(Icons.delete_outline),
+                        icon: const GlyphIcon(Glyph.delete),
                         onPressed: () => _remove(context, ref, w),
                       ),
                     ],
@@ -183,10 +177,81 @@ class WorkersPage extends ConsumerWidget {
         ),
         _ => Align(
           alignment: Alignment.topCenter,
-          child: LinearProgressIndicator(color: t.muted),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 24),
+            child: GlyphIcon(
+              Glyph.run,
+              size: 24,
+              color: t.muted,
+              motion: GlyphMotion.loop,
+            ),
+          ),
         ),
       },
     );
+  }
+}
+
+class _WorkersStrip extends StatelessWidget {
+  const _WorkersStrip({required this.workers});
+  final List<Worker> workers;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    int count(String s) => workers.where((w) => w.state == s).length;
+    final busy = count('busy');
+    return ScreenStrip(
+      cells: [
+        ScreenCell(
+          glyph: Glyph.worker,
+          label: 'online',
+          value: '${count('online')}',
+          color: t.screenGreen,
+          motion: count('online') > 0 ? GlyphMotion.once : GlyphMotion.still,
+        ),
+        ScreenCell(
+          glyph: Glyph.activity,
+          label: 'busy',
+          value: '$busy',
+          color: busy > 0 ? t.screenAccent : t.screenMuted,
+          motion: busy > 0 ? GlyphMotion.once : GlyphMotion.still,
+        ),
+        ScreenCell(
+          glyph: Glyph.workerOff,
+          label: 'offline',
+          value: '${count('offline')}',
+          color: t.screenMuted,
+        ),
+      ],
+    );
+  }
+}
+
+/// The worker as a key: its colour is its state.
+class _StateKey extends StatelessWidget {
+  const _StateKey({required this.worker});
+  final Worker worker;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return switch (worker.state) {
+      'online' => GlyphKey(
+        Glyph.worker,
+        color: t.green,
+        motion: GlyphMotion.once,
+        semanticLabel: 'Online',
+      ),
+      'busy' => GlyphKey(
+        Glyph.activity,
+        color: t.accent,
+        ink: t.accentInk,
+        motion: GlyphMotion.once,
+        semanticLabel: 'Busy',
+      ),
+      _ => GlyphKey(Glyph.workerOff, color: t.idle, semanticLabel: 'Offline'),
+    };
   }
 }
 
@@ -246,7 +311,42 @@ class _PairingDialogState extends State<PairingDialog> {
               'On the machine that has your checkouts, run this in services/worker:',
             ),
             const SizedBox(height: 12),
-            // The command's well: the side field with a hairline, so it reads as a block on the white sheet.
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: t.screen,
+                borderRadius: BorderRadius.circular(Tokens.radiusScreen),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 20,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SelectableText(
+                      code,
+                      style: t.mono(
+                        theme.textTheme.headlineMedium!.copyWith(
+                          color: t.screenInk,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Works once. Expires at ${TimeOfDay.fromDateTime(widget.expiresAt).format(context)}.',
+                      style: theme.textTheme.bodySmall!.copyWith(
+                        color: t.screenMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // The command's well: the side field with a hairline.
             Material(
               color: t.paper3,
               shape: RoundedRectangleBorder(
@@ -267,10 +367,8 @@ class _PairingDialogState extends State<PairingDialog> {
                       ),
                     ),
                     TextButton.icon(
-                      icon: Icon(
-                        _copied == null
-                            ? Icons.content_copy_outlined
-                            : Icons.check,
+                      icon: GlyphIcon(
+                        _copied == null ? Glyph.copy : Glyph.check,
                         size: 18,
                       ),
                       label: Text(_copied == null ? 'Copy' : 'Copied'),
@@ -289,21 +387,6 @@ class _PairingDialogState extends State<PairingDialog> {
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 24),
-            SelectableText(
-              code,
-              style: t.mono(
-                theme.textTheme.headlineMedium!.copyWith(
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 1,
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Works once. Expires at ${TimeOfDay.fromDateTime(widget.expiresAt).format(context)}.',
-              style: theme.textTheme.bodySmall,
             ),
           ],
         ),

@@ -1,14 +1,14 @@
-// Impeccable · world: Internet-Draft (IETF RFC standards document) · mode: operate · seed:9edb3df007981102
-// The direction contract lives in .impeccable/surfaces/ (task page brief); DESIGN.md records the shipped system.
-//
 // The one place colours, faces, radii and durations live. Screens read them via
 // Theme.of(context) and `context.tokens`; no literal Color or fontFamily past this file.
+// DESIGN.md records the system; the direction contract lives in .impeccable/surfaces/.
 import 'package:flutter/material.dart';
 
-const _body = 'SourceSans3';
-const _mono = 'SourceCodePro';
+import 'glyphs.dart';
 
-/// Draft tokens that Material's ColorScheme has no slot for.
+const _body = 'Manrope';
+const _mono = 'JetBrainsMono';
+
+/// Tokens that Material's ColorScheme has no slot for.
 @immutable
 class Tokens extends ThemeExtension<Tokens> {
   const Tokens({
@@ -26,83 +26,123 @@ class Tokens extends ThemeExtension<Tokens> {
     required this.green,
     required this.greenSoft,
     required this.danger,
+    required this.blue,
+    required this.blueSoft,
+    required this.idle,
+    required this.screen,
+    required this.screenInk,
+    required this.screenMuted,
+    required this.screenGreen,
+    required this.screenAccent,
+    required this.screenBlue,
   });
 
-  /// Page ground (white paper), raised sheet (fields, dialogs), side field (rails, lanes, code wells).
+  /// Shell (page ground), sheet (fields, cards, dialogs), side field (rails, lanes).
   final Color paper, paper2, paper3;
 
-  /// Text: primary, secondary, quiet. [rule] is every hairline.
+  /// Text: primary, secondary, quiet. [rule] is every seam.
   final Color ink, ink2, muted, rule;
 
-  /// Normative red: the primary action, the agent's own MUST/SHOULD/MAY, selection.
-  /// As a fill it carries [accentInk]; as type it marks normative words only.
+  /// The orange key: only what is live or waiting on you (a running refinement, Approve spec).
+  /// As a fill it carries [accentInk].
   final Color accent, accentInk, accentSoft, focus;
 
-  /// Verified / approved / passed, and destructive / failed (needs you).
+  /// Online / verified / passed, and failed or destructive.
   final Color green, greenSoft, danger;
 
-  static const radiusControl = 6.0;
-  static const radiusCard = 6.0;
+  /// Evidence and reading; [idle] is a key at rest.
+  final Color blue, blueSoft, idle;
+
+  /// The black screen strip and the glyphs drawn on it.
+  final Color screen,
+      screenInk,
+      screenMuted,
+      screenGreen,
+      screenAccent,
+      screenBlue;
+
+  static const radiusControl = 10.0;
+  static const radiusCard = 12.0;
+  static const radiusScreen = 14.0;
   static const durMicro = Duration(milliseconds: 120);
   static const durShort = Duration(milliseconds: 200);
 
-  /// Figures that get copied: ids, dates, times, counts, branch names.
+  /// Every glyph moves on this one beat: 400ms, one small overshoot.
+  static const durGlyph = Duration(milliseconds: 400);
+  static const curveGlyph = Curves.easeOutBack;
+
+  /// Data only: commits, paths, line ranges, counts, ids, dates.
   TextStyle mono(TextStyle base) => base.copyWith(
     fontFamily: _mono,
     fontFeatures: const [FontFeature.tabularFigures()],
     fontSize: (base.fontSize ?? 14) - 1,
   );
 
-  /// The one normative act on a screen (Approve spec, Refine with AI): a red fill over the ink default.
-  ButtonStyle get normative =>
+  /// The orange key for the one act that is waiting on you (Approve spec).
+  ButtonStyle get liveKey =>
       FilledButton.styleFrom(
         backgroundColor: accent,
         foregroundColor: accentInk,
       ).copyWith(
         side: WidgetStateProperty.resolveWith(
           (s) => s.contains(WidgetState.focused)
-              ? BorderSide(color: ink, width: 2)
+              ? BorderSide(color: focus, width: 2)
               : BorderSide(color: accent),
         ),
       );
 
-  /// The header block's rules: 2px ink above, 1px ink below. Everything else is a [hairline].
-  BorderSide get headRule => BorderSide(color: ink, width: 2);
-  BorderSide get inkRule => BorderSide(color: ink);
   BorderSide get hairline => BorderSide(color: rule);
 
   static const light = Tokens(
-    paper: Color(0xFFFFFFFF),
-    paper2: Color(0xFFFFFFFF),
-    paper3: Color(0xFFFAF9F7),
-    ink: Color(0xFF1A1A1A),
-    ink2: Color(0xFF33312E),
-    muted: Color(0xFF5E5B56),
-    rule: Color(0xFFE9E7E3),
-    accent: Color(0xFF9A2A1F),
-    accentInk: Color(0xFFFFFFFF),
-    accentSoft: Color(0xFFF5E2DF),
-    focus: Color(0xFF1A1A1A),
-    green: Color(0xFF2F6B3A),
-    greenSoft: Color(0xFFE4EFE5),
-    danger: Color(0xFF9A2A1F),
+    paper: Color(0xFFE6E6E3),
+    paper2: Color(0xFFF4F4F2),
+    paper3: Color(0xFFDADAD6),
+    ink: Color(0xFF1C1C1E),
+    ink2: Color(0xFF34363A),
+    muted: Color(0xFF5A5E63),
+    rule: Color(0xFFCFCFCB),
+    accent: Color(0xFFFF5A1F),
+    accentInk: Color(0xFF1C1C1E),
+    accentSoft: Color(0xFFFFD9C9),
+    focus: Color(0xFF1C1C1E),
+    green: Color(0xFF0E7A42),
+    greenSoft: Color(0xFFCDEBD9),
+    danger: Color(0xFFC92A2A),
+    blue: Color(0xFF2F6BFF),
+    blueSoft: Color(0xFFD5E1FF),
+    idle: Color(0xFF9AA0A6),
+    screen: Color(0xFF111214),
+    screenInk: Color(0xFFE9E9E6),
+    screenMuted: Color(0xFF8A8F95),
+    screenGreen: Color(0xFF2FD27C),
+    screenAccent: Color(0xFFFF6A33),
+    screenBlue: Color(0xFF6E97FF),
   );
 
   static const dark = Tokens(
-    paper: Color(0xFF151413),
-    paper2: Color(0xFF221F1D),
-    paper3: Color(0xFF1B1A18),
-    ink: Color(0xFFECEAE6),
-    ink2: Color(0xFFD6D3CE),
-    muted: Color(0xFFA19D96),
-    rule: Color(0xFF34312D),
-    accent: Color(0xFFE5735F),
-    accentInk: Color(0xFF151413),
-    accentSoft: Color(0xFF4A231D),
-    focus: Color(0xFFECEAE6),
-    green: Color(0xFF85C291),
-    greenSoft: Color(0xFF1D3322),
-    danger: Color(0xFFE5735F),
+    paper: Color(0xFF26272B),
+    paper2: Color(0xFF303135),
+    paper3: Color(0xFF202124),
+    ink: Color(0xFFECECEA),
+    ink2: Color(0xFFD2D3D0),
+    muted: Color(0xFFA3A7AD),
+    rule: Color(0xFF3C3E43),
+    accent: Color(0xFFFF6A33),
+    accentInk: Color(0xFF151617),
+    accentSoft: Color(0xFF4A2414),
+    focus: Color(0xFFECECEA),
+    green: Color(0xFF2FD27C),
+    greenSoft: Color(0xFF173A26),
+    danger: Color(0xFFFF6B6B),
+    blue: Color(0xFF6E97FF),
+    blueSoft: Color(0xFF1E2A4A),
+    idle: Color(0xFF6B7076),
+    screen: Color(0xFF0B0C0D),
+    screenInk: Color(0xFFE9E9E6),
+    screenMuted: Color(0xFF8A8F95),
+    screenGreen: Color(0xFF2FD27C),
+    screenAccent: Color(0xFFFF6A33),
+    screenBlue: Color(0xFF6E97FF),
   );
 
   @override
@@ -130,9 +170,9 @@ ThemeData buildTheme(Brightness brightness) {
     primaryContainer: t.accentSoft,
     onPrimaryContainer: t.ink,
     secondary: t.ink,
-    onSecondary: t.paper,
+    onSecondary: t.paper2,
     tertiary: t.green,
-    onTertiary: t.paper,
+    onTertiary: t.paper2,
     error: t.danger,
     onError: t.paper2,
     surface: t.paper,
@@ -145,13 +185,13 @@ ThemeData buildTheme(Brightness brightness) {
     surfaceContainerHighest: t.paper3,
     outline: t.muted,
     outlineVariant: t.rule,
-    inverseSurface: t.ink,
-    onInverseSurface: t.paper,
+    inverseSurface: t.screen,
+    onInverseSurface: t.screenInk,
     shadow: t.ink,
     surfaceTint: Colors.transparent,
   );
 
-  // Type: Source Sans 3 throughout, hierarchy by size and weight; Source Code Pro via [Tokens.mono].
+  // Manrope throughout, hierarchy by size and the 800 weight; JetBrains Mono via [Tokens.mono].
   TextStyle s(double size, FontWeight w, {double h = 1.4, double ls = 0}) =>
       TextStyle(
         fontFamily: _body,
@@ -163,23 +203,24 @@ ThemeData buildTheme(Brightness brightness) {
       );
   const regular = FontWeight.w400,
       semi = FontWeight.w600,
-      bold = FontWeight.w700;
+      heavy = FontWeight.w800;
   final text = TextTheme(
-    displaySmall: s(30, bold, h: 1.2, ls: -0.3),
-    headlineMedium: s(28, bold, h: 1.2, ls: -0.3),
-    headlineSmall: s(24, bold, h: 1.25, ls: -0.2),
-    titleLarge: s(20, bold, h: 1.3),
-    titleMedium: s(17, bold, h: 1.35),
-    titleSmall: s(15, semi, h: 1.35),
-    bodyLarge: s(16, regular, h: 1.5),
-    bodyMedium: s(15, regular, h: 1.5),
-    bodySmall: s(13.5, regular, h: 1.45).copyWith(color: t.muted),
-    labelLarge: s(15, semi, h: 1.2),
-    labelMedium: s(13.5, semi, h: 1.2),
-    labelSmall: s(12.5, semi, h: 1.2).copyWith(color: t.muted),
+    displaySmall: s(30, heavy, h: 1.2, ls: -0.4),
+    headlineMedium: s(28, heavy, h: 1.2, ls: -0.4),
+    headlineSmall: s(24, heavy, h: 1.25, ls: -0.3),
+    titleLarge: s(20, heavy, h: 1.3, ls: -0.2),
+    titleMedium: s(16, heavy, h: 1.35),
+    titleSmall: s(14, heavy, h: 1.35),
+    bodyLarge: s(16, regular, h: 1.55),
+    bodyMedium: s(14.5, regular, h: 1.5),
+    bodySmall: s(13, regular, h: 1.45).copyWith(color: t.muted),
+    labelLarge: s(14.5, heavy, h: 1.2),
+    labelMedium: s(13, semi, h: 1.2),
+    labelSmall: s(12, semi, h: 1.2).copyWith(color: t.muted),
   );
 
-  final shape = RoundedRectangleBorder(
+  const pill = StadiumBorder();
+  final rounded = RoundedRectangleBorder(
     borderRadius: BorderRadius.circular(Tokens.radiusControl),
   );
   final focusRing = WidgetStateProperty.resolveWith<BorderSide?>(
@@ -187,16 +228,17 @@ ThemeData buildTheme(Brightness brightness) {
         ? BorderSide(color: t.focus, width: 2)
         : null,
   );
-  const controlSize = Size(0, 40);
-  const pad = EdgeInsets.symmetric(horizontal: 18);
+  const controlSize = Size(0, 42);
+  const pad = EdgeInsets.symmetric(horizontal: 20);
   ButtonStyle base(ButtonStyle s) => s.copyWith(
-    shape: WidgetStatePropertyAll(shape),
+    shape: const WidgetStatePropertyAll(pill),
     minimumSize: const WidgetStatePropertyAll(controlSize),
     padding: const WidgetStatePropertyAll(pad),
     textStyle: WidgetStatePropertyAll(text.labelLarge),
     elevation: const WidgetStatePropertyAll(0),
     animationDuration: Tokens.durMicro,
     tapTargetSize: MaterialTapTargetSize.padded,
+    iconSize: const WidgetStatePropertyAll(18),
   );
 
   OutlineInputBorder field(Color c, [double w = 1]) => OutlineInputBorder(
@@ -214,11 +256,16 @@ ThemeData buildTheme(Brightness brightness) {
     scaffoldBackgroundColor: t.paper,
     canvasColor: t.paper,
     dividerColor: t.rule,
-    focusColor: t.focus.withValues(alpha: 0.14),
+    focusColor: t.focus.withValues(alpha: 0.12),
     hoverColor: t.ink.withValues(alpha: 0.05),
     splashFactory: NoSplash.splashFactory,
     highlightColor: t.ink.withValues(alpha: 0.06),
     visualDensity: VisualDensity.standard,
+    iconTheme: IconThemeData(color: t.ink2, size: 20),
+    // Every implied BackButton draws the same glyph key; it still pops the route.
+    actionIconTheme: ActionIconThemeData(
+      backButtonIconBuilder: (_) => const GlyphIcon(Glyph.back),
+    ),
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: {
         TargetPlatform.android: _CalmTransitions(),
@@ -236,9 +283,9 @@ ThemeData buildTheme(Brightness brightness) {
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
-      titleSpacing: 16,
+      titleSpacing: 12,
       toolbarHeight: 56,
-      titleTextStyle: text.titleLarge,
+      titleTextStyle: text.titleMedium,
       shape: Border(bottom: BorderSide(color: t.rule)),
     ),
     cardTheme: CardThemeData(
@@ -256,14 +303,14 @@ ThemeData buildTheme(Brightness brightness) {
           base(
             FilledButton.styleFrom(
               backgroundColor: t.ink,
-              foregroundColor: t.paper,
+              foregroundColor: t.paper2,
               disabledBackgroundColor: t.paper3,
               disabledForegroundColor: t.muted,
             ),
           ).copyWith(
             side: WidgetStateProperty.resolveWith(
               (s) => s.contains(WidgetState.focused)
-                  ? BorderSide(color: t.accent, width: 2)
+                  ? BorderSide(color: t.focus, width: 2)
                   : BorderSide(color: t.ink),
             ),
           ),
@@ -273,13 +320,13 @@ ThemeData buildTheme(Brightness brightness) {
           base(
             OutlinedButton.styleFrom(
               foregroundColor: t.ink,
-              backgroundColor: t.paper,
+              backgroundColor: t.paper2,
             ),
           ).copyWith(
             side: WidgetStateProperty.resolveWith(
               (s) => s.contains(WidgetState.focused)
                   ? BorderSide(color: t.focus, width: 2)
-                  : BorderSide(color: t.ink),
+                  : BorderSide(color: t.ink, width: 1.5),
             ),
           ),
     ),
@@ -290,7 +337,7 @@ ThemeData buildTheme(Brightness brightness) {
     iconButtonTheme: IconButtonThemeData(
       style: IconButton.styleFrom(
         foregroundColor: t.ink2,
-        shape: shape,
+        shape: const CircleBorder(),
         minimumSize: const Size(40, 40),
       ).copyWith(side: focusRing),
     ),
@@ -301,13 +348,13 @@ ThemeData buildTheme(Brightness brightness) {
       focusElevation: 0,
       hoverElevation: 0,
       highlightElevation: 0,
-      shape: shape,
+      shape: pill,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: t.paper2,
       isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
       labelStyle: text.bodyMedium!.copyWith(color: t.muted),
       // Material draws the floated label at 0.75 scale: 16px here renders at 12px.
       floatingLabelStyle: text.labelMedium!.copyWith(
@@ -317,8 +364,6 @@ ThemeData buildTheme(Brightness brightness) {
       hintStyle: text.bodyMedium!.copyWith(color: t.muted),
       border: field(t.rule),
       enabledBorder: field(t.rule),
-      // Constant border width would be ideal; Flutter draws focus as the border, so the
-      // ring is the 2px focus colour and the resting border stays 1px.
       focusedBorder: field(t.focus, 2),
       errorBorder: field(t.danger),
       focusedErrorBorder: field(t.danger, 2),
@@ -330,7 +375,7 @@ ThemeData buildTheme(Brightness brightness) {
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(Tokens.radiusCard),
+        borderRadius: BorderRadius.circular(Tokens.radiusScreen),
         side: BorderSide(color: t.rule),
       ),
       titleTextStyle: text.titleLarge,
@@ -350,48 +395,45 @@ ThemeData buildTheme(Brightness brightness) {
       style: MenuStyle(
         backgroundColor: WidgetStatePropertyAll(t.paper2),
         surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-        shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(Tokens.radiusControl),
-            side: BorderSide(color: t.rule),
-          ),
-        ),
+        shape: WidgetStatePropertyAll(rounded.copyWith(side: t.hairline)),
       ),
     ),
     snackBarTheme: SnackBarThemeData(
-      backgroundColor: t.ink,
-      contentTextStyle: text.bodyMedium!.copyWith(color: t.paper),
-      actionTextColor: t.accent,
+      backgroundColor: t.screen,
+      contentTextStyle: text.bodyMedium!.copyWith(color: t.screenInk),
+      actionTextColor: t.screenAccent,
       behavior: SnackBarBehavior.floating,
       elevation: 0,
-      shape: shape,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Tokens.radiusScreen),
+      ),
     ),
     chipTheme: ChipThemeData(
       backgroundColor: t.paper3,
       side: BorderSide.none,
-      shape: shape,
+      shape: pill,
       labelStyle: text.labelMedium,
       padding: const EdgeInsets.symmetric(horizontal: 6),
     ),
     dividerTheme: DividerThemeData(color: t.rule, thickness: 1, space: 1),
     listTileTheme: ListTileThemeData(
       dense: true,
-      shape: shape,
+      shape: rounded,
       iconColor: t.muted,
       titleTextStyle: text.bodyMedium,
       subtitleTextStyle: text.bodySmall,
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(
-      color: t.ink2,
+      color: t.accent,
       linearTrackColor: t.paper3,
       circularTrackColor: Colors.transparent,
     ),
     tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(
-        color: t.ink,
-        borderRadius: BorderRadius.circular(4),
+        color: t.screen,
+        borderRadius: BorderRadius.circular(8),
       ),
-      textStyle: text.labelMedium!.copyWith(color: t.paper),
+      textStyle: text.labelMedium!.copyWith(color: t.screenInk),
       waitDuration: const Duration(milliseconds: 400),
     ),
     scrollbarTheme: ScrollbarThemeData(
@@ -407,7 +449,7 @@ ThemeData buildTheme(Brightness brightness) {
       fillColor: WidgetStateProperty.resolveWith(
         (s) => s.contains(WidgetState.selected) ? t.ink : Colors.transparent,
       ),
-      checkColor: WidgetStatePropertyAll(t.paper),
+      checkColor: WidgetStatePropertyAll(t.paper2),
       side: BorderSide(color: t.muted, width: 1.5),
     ),
   );

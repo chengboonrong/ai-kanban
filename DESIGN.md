@@ -1,317 +1,337 @@
 ---
 name: AI Kanban
-description: A kanban board whose specs read like Internet-Drafts, put to work.
+description: A pocket synth for specs. Every worker and run is a small instrument whose state lives in coloured keys and a black screen.
 colors:
-  paper: "#FFFFFF"
-  side-field: "#FAF9F7"
-  rule: "#E9E7E3"
-  ink: "#1A1A1A"
-  ink-secondary: "#33312E"
-  muted: "#5E5B56"
-  normative-red: "#9A2A1F"
-  normative-red-soft: "#F5E2DF"
-  verified-green: "#2F6B3A"
-  verified-green-soft: "#E4EFE5"
-  paper-dark: "#151413"
-  sheet-dark: "#221F1D"
-  side-field-dark: "#1B1A18"
-  rule-dark: "#34312D"
-  ink-dark: "#ECEAE6"
-  ink-secondary-dark: "#D6D3CE"
-  muted-dark: "#A19D96"
-  normative-red-dark: "#E5735F"
-  normative-red-soft-dark: "#4A231D"
-  verified-green-dark: "#85C291"
-  verified-green-soft-dark: "#1D3322"
+  shell: "#E6E6E3"
+  sheet: "#F4F4F2"
+  side-field: "#DADAD6"
+  seam: "#CFCFCB"
+  ink: "#1C1C1E"
+  ink-secondary: "#34363A"
+  muted: "#5A5E63"
+  live-orange: "#FF5A1F"
+  live-orange-ink: "#1C1C1E"
+  live-orange-soft: "#FFD9C9"
+  verified-green: "#0E7A42"
+  verified-green-soft: "#CDEBD9"
+  danger-red: "#C92A2A"
+  evidence-blue: "#2F6BFF"
+  evidence-blue-soft: "#D5E1FF"
+  idle-grey: "#9AA0A6"
+  screen: "#111214"
+  screen-ink: "#E9E9E6"
+  screen-muted: "#8A8F95"
+  screen-green: "#2FD27C"
+  screen-orange: "#FF6A33"
+  screen-blue: "#6E97FF"
+  shell-dark: "#26272B"
+  sheet-dark: "#303135"
+  side-field-dark: "#202124"
+  seam-dark: "#3C3E43"
+  ink-dark: "#ECECEA"
+  ink-secondary-dark: "#D2D3D0"
+  muted-dark: "#A3A7AD"
+  live-orange-dark: "#FF6A33"
+  live-orange-ink-dark: "#151617"
+  live-orange-soft-dark: "#4A2414"
+  verified-green-dark: "#2FD27C"
+  verified-green-soft-dark: "#173A26"
+  danger-red-dark: "#FF6B6B"
+  evidence-blue-dark: "#6E97FF"
+  evidence-blue-soft-dark: "#1E2A4A"
+  idle-grey-dark: "#6B7076"
+  screen-dark: "#0B0C0D"
 typography:
   display:
-    fontFamily: "Source Sans 3, sans-serif"
+    fontFamily: "Manrope, sans-serif"
     fontSize: "30px"
-    fontWeight: 700
+    fontWeight: 800
     lineHeight: 1.2
-    letterSpacing: "-0.3px"
+    letterSpacing: "-0.4px"
   headline:
-    fontFamily: "Source Sans 3, sans-serif"
+    fontFamily: "Manrope, sans-serif"
     fontSize: "24px"
-    fontWeight: 700
+    fontWeight: 800
     lineHeight: 1.25
-    letterSpacing: "-0.2px"
-  title-large:
-    fontFamily: "Source Sans 3, sans-serif"
-    fontSize: "20px"
-    fontWeight: 700
-    lineHeight: 1.3
+    letterSpacing: "-0.3px"
   title:
-    fontFamily: "Source Sans 3, sans-serif"
-    fontSize: "17px"
-    fontWeight: 700
-    lineHeight: 1.35
+    fontFamily: "Manrope, sans-serif"
+    fontSize: "20px"
+    fontWeight: 800
+    lineHeight: 1.3
+    letterSpacing: "-0.2px"
   title-small:
-    fontFamily: "Source Sans 3, sans-serif"
-    fontSize: "15px"
-    fontWeight: 600
+    fontFamily: "Manrope, sans-serif"
+    fontSize: "16px"
+    fontWeight: 800
     lineHeight: 1.35
   body-large:
-    fontFamily: "Source Sans 3, sans-serif"
+    fontFamily: "Manrope, sans-serif"
     fontSize: "16px"
     fontWeight: 400
-    lineHeight: 1.5
+    lineHeight: 1.55
   body:
-    fontFamily: "Source Sans 3, sans-serif"
-    fontSize: "15px"
+    fontFamily: "Manrope, sans-serif"
+    fontSize: "14.5px"
     fontWeight: 400
     lineHeight: 1.5
   body-small:
-    fontFamily: "Source Sans 3, sans-serif"
-    fontSize: "13.5px"
+    fontFamily: "Manrope, sans-serif"
+    fontSize: "13px"
     fontWeight: 400
     lineHeight: 1.45
   label:
-    fontFamily: "Source Sans 3, sans-serif"
-    fontSize: "15px"
-    fontWeight: 600
+    fontFamily: "Manrope, sans-serif"
+    fontSize: "14.5px"
+    fontWeight: 800
     lineHeight: 1.2
   label-medium:
-    fontFamily: "Source Sans 3, sans-serif"
-    fontSize: "13.5px"
+    fontFamily: "Manrope, sans-serif"
+    fontSize: "13px"
     fontWeight: 600
     lineHeight: 1.2
-  mono-header:
-    fontFamily: "Source Code Pro, monospace"
-    fontSize: "13px"
+  label-small:
+    fontFamily: "Manrope, sans-serif"
+    fontSize: "12px"
+    fontWeight: 600
+    lineHeight: 1.2
+  mono:
+    fontFamily: "JetBrains Mono, monospace"
     fontWeight: 400
-    lineHeight: 1.7
-    fontFeature: "tnum"
-  mono-reference:
-    fontFamily: "Source Code Pro, monospace"
-    fontSize: "14px"
-    fontWeight: 400
-    lineHeight: 1.5
     fontFeature: "tnum"
 rounded:
-  badge: "4px"
-  control: "6px"
+  keycap: "4px"
+  control: "10px"
+  card: "12px"
+  screen: "14px"
+  pill: "999px"
 spacing:
   xs: "4px"
   sm: "8px"
   md: "12px"
   lg: "16px"
-  xl: "24px"
-  page: "48px"
+  xl: "20px"
+  2xl: "24px"
+  3xl: "48px"
 components:
-  button-normative:
-    backgroundColor: "{colors.normative-red}"
-    textColor: "{colors.paper}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "0 18px"
-    height: "40px"
-  button-primary:
+  button-ink:
     backgroundColor: "{colors.ink}"
-    textColor: "{colors.paper}"
+    textColor: "{colors.sheet}"
     typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "0 18px"
-    height: "40px"
-  button-outlined:
-    backgroundColor: "{colors.paper}"
+    rounded: "{rounded.pill}"
+    padding: "0 20px"
+    height: "42px"
+  button-live:
+    backgroundColor: "{colors.live-orange}"
+    textColor: "{colors.live-orange-ink}"
+    typography: "{typography.label}"
+    rounded: "{rounded.pill}"
+    padding: "0 20px"
+    height: "42px"
+  button-outline:
+    backgroundColor: "{colors.sheet}"
     textColor: "{colors.ink}"
     typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "0 18px"
-    height: "40px"
-  button-text:
-    textColor: "{colors.ink}"
+    rounded: "{rounded.pill}"
+    padding: "0 20px"
+    height: "42px"
+  button-danger:
+    backgroundColor: "{colors.danger-red}"
+    textColor: "{colors.sheet}"
     typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "0 18px"
-    height: "40px"
+    rounded: "{rounded.pill}"
+    padding: "0 20px"
+    height: "42px"
   input:
-    backgroundColor: "{colors.paper}"
+    backgroundColor: "{colors.sheet}"
     textColor: "{colors.ink}"
     typography: "{typography.body}"
     rounded: "{rounded.control}"
-    padding: "12px"
-  status-chip-good:
-    backgroundColor: "{colors.verified-green-soft}"
-    textColor: "{colors.verified-green}"
-    typography: "{typography.label-medium}"
-    rounded: "{rounded.badge}"
-    padding: "0 6px"
-  status-chip-bad:
-    backgroundColor: "{colors.normative-red-soft}"
-    textColor: "{colors.normative-red}"
-    typography: "{typography.label-medium}"
-    rounded: "{rounded.badge}"
-    padding: "0 6px"
-  status-chip-active:
+    padding: "13px 14px"
+  card:
+    backgroundColor: "{colors.sheet}"
+    rounded: "{rounded.card}"
+  screen-strip:
+    backgroundColor: "{colors.screen}"
+    textColor: "{colors.screen-ink}"
+    rounded: "{rounded.screen}"
+    padding: "16px 20px"
+  glyph-key:
+    backgroundColor: "{colors.verified-green}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.pill}"
+    size: "32px"
+  keycap:
     backgroundColor: "{colors.ink}"
-    textColor: "{colors.paper}"
+    textColor: "{colors.sheet}"
+    typography: "{typography.mono}"
+    rounded: "{rounded.keycap}"
+    padding: "1px 5px"
+  status-pill-ready:
+    backgroundColor: "{colors.live-orange}"
+    textColor: "{colors.live-orange-ink}"
     typography: "{typography.label-medium}"
-    rounded: "{rounded.badge}"
-    padding: "0 6px"
-  task-row:
-    backgroundColor: "{colors.paper}"
-    textColor: "{colors.ink}"
-    typography: "{typography.title-small}"
-    rounded: "{rounded.control}"
-  lane:
-    backgroundColor: "{colors.side-field}"
-    rounded: "{rounded.control}"
-    width: "288px"
-  activity-rail:
-    backgroundColor: "{colors.side-field}"
-    width: "360px"
-  app-bar:
-    backgroundColor: "{colors.paper}"
-    textColor: "{colors.ink}"
-    typography: "{typography.title-large}"
-    height: "56px"
+    rounded: "{rounded.pill}"
+    padding: "3px 10px 3px 6px"
 ---
 
 # Design System: AI Kanban
 
 ## Overview
 
-**Creative North Star: "The Internet-Draft, Put to Work"**
+**Creative North Star: "The Pocket Synth"**
 
-Every screen reads like a standards document that is being used rather than archived. A screen opens by stating what it holds and what it stands on: a monospaced header block (repository, version, commit, status, readiness) set between a heavy ink rule and a light one. The prose below is plain, set in Source Sans 3 on white paper, separated by hairlines rather than boxes. References to code are written the way an RFC cites a reference: `[E1] path:12-40 verified`.
+Every worker and every refinement run is a small instrument. The app is a light anodized shell (graphite in the dark edition) carrying round colour keys and, where something is live or worth a glance, one black screen strip on which Lucide line glyphs sit over tiny lowercase labels and mono readouts. State is read first as colour and motion, then as words; words drop to the smallest size that still reads.
 
-Colour is almost entirely absent. Ink and paper do the work; warm grey hairlines and a faintly warm side field set the structure. One red is normative: it marks the single act that matters on a screen (Approve spec, Refine with AI), the MUST/SHOULD/MAY words the agent itself wrote, and the failures that need you. One quiet green says verified, approved or passing, and nothing else.
+The shell is flat and quiet. Depth comes from three neutral fields (shell, sheet, side field) separated by one-pixel seams, never from shadow. Prose (briefs, spec sections) stays plain readable Manrope at a 680px measure, with the agent's RFC 2119 keywords set as dark key-caps. Orange is scarce on purpose: it marks only what is running right now or waiting on the person.
 
-The system refuses the grey issue tracker with an indigo accent, and the warm-paper "Furrow" ledger it replaced. Light and dark both ship and follow the system setting. Dark is a warm near-black sheet with the same rules, not an inverted page.
+Motion has one grammar. Glyphs are still by default, loop only while work runs, play once when a state arrives, and freeze entirely under reduced motion. Light and dark both ship and follow the system setting.
 
 **Key Characteristics:**
-- White paper, near-black ink, warm grey hairlines; colour is a signal, never decoration.
-- A mono header block between a 2px and a 1px ink rule opens the task, board, home, sign-in and workers screens.
-- One normative red per screen; one quiet green for verified states.
-- Flat: no elevation at rest, no cards inside cards, 6px corners.
-- Source Sans 3 for UI and prose, Source Code Pro for anything you would copy.
+- Neutral anodized shell, three tonal fields, hairline seams, no shadows, gradients or glass.
+- Colour-coded round keys: orange live, green online/verified, blue evidence, grey idle.
+- At most one black screen strip per screen, for live or summary state only.
+- Lucide line glyphs as the only icon language, animated only while something is live.
+- Manrope 800 for hierarchy, JetBrains Mono for data only.
+- Pill buttons, round keys, 10/12/14px rectangles.
 
 ## Colors
 
-An ink-on-paper palette with one normative red and one quiet green, each mirrored in a warm dark set.
+A neutral grey shell with four functional key colours and a black instrument screen; the screen has its own brighter key set so glyphs read on black.
 
 ### Primary
-- **Normative Red** (normative-red; normative-red-dark in dark): the fill of the one normative button on a screen, the floating action button, the RFC 2119 keywords inside agent-written text, text selection handles, and destructive confirms and failure chips. Its soft tint (normative-red-soft) is the ground of a failure chip and the text selection colour.
+- **Live Orange** (live-orange; dark: live-orange-dark): the running refinement (spinning run arc, current lifecycle stage), the "Spec ready for review" pill on a card, the board strip's ready-for-review glyph when the count is above zero, a busy worker's key, and the Approve spec button. Text and glyphs on it use Live Orange Ink, which is near-black in both themes. Live Orange Soft is the text-selection highlight.
+- **Screen Orange** (screen-orange): the same role drawn on the black screen.
 
 ### Secondary
-- **Verified Green** (verified-green, with verified-green-soft as its ground): "verified" evidence marks, the Approved status, CI passing and approved-review chips. It never appears as a button or decoration.
+- **Verified Green** (verified-green; screen-green on the screen): worker online, evidence verified, spec approved, CI passing, readiness dial.
+- **Evidence Blue** (evidence-blue; screen-blue on the screen): evidence and reading: the evidence cell, evidence section keys, reading activity.
+
+### Tertiary
+- **Danger Red** (danger-red): failed states and every destructive confirm (the confirm dialog's filled button is red).
+- **Idle Grey** (idle-grey): a key at rest (offline worker, sign-in key).
 
 ### Neutral
-- **Paper** (paper / paper-dark): page ground, app bar, the bar pinned under the spec, inputs and task rows. In dark, raised sheets (fields, dialogs, task rows on a lane) step up to sheet-dark.
-- **Side Field** (side-field / side-field-dark): the activity rail, board lanes, the live run panel and code wells. The only tonal step; it sits beside the page, never inside a card.
-- **Ink** (ink / ink-dark): all primary text, the default filled button, header-block rules, the solid newest-event dot, focus rings, tooltips and snackbars.
-- **Ink Secondary** (ink-secondary): icon buttons, run-event lines, evidence notes.
-- **Muted** (muted / muted-dark): the brief under a title, hints, labels, timestamps, unverified marks, hollow timeline dots.
-- **Rule** (rule / rule-dark): every hairline: app bar underline, row separators, input borders at rest, card borders, skeleton bars.
+- **Anodized Shell** (shell): page ground, app bar, pinned action bar.
+- **Sheet** (sheet): fields, cards, dialogs, menus, outline-button fill; also the text colour on ink fills.
+- **Side Field** (side-field): board lanes, the task page's 360px activity rail, chips, disabled fills.
+- **Seam** (seam): every one-pixel border and divider.
+- **Ink / Ink Secondary / Muted** (ink, ink-secondary, muted): primary text and ink buttons; icons; secondary text, labels and timestamps.
+- **Screen / Screen Ink / Screen Muted** (screen, screen-ink, screen-muted): the black strip, its readouts and its tiny labels and idle glyphs. Tooltips and snackbars use the same screen.
 
 ### Named Rules
-**The One Normative Act Rule.** A screen carries at most one red-filled button, and it is the act the screen exists for. Everything else is ink, outlined, or text.
+**The Orange Means Now Rule.** Orange appears only on something live or awaiting the person: the running refinement, "Spec ready for review", and Approve spec. Starting work is not live: "Refine with AI" is an ink button and "Refine again" is an outline button.
 
-**The Agent Wrote It Rule.** Normative keywords are coloured only where the agent's own text contains them (`MUST NOT`, `SHALL NOT`, `SHOULD NOT`, `MUST`, `SHALL`, `SHOULD`, `MAY`, `REQUIRED`). The UI never adds a keyword of its own to borrow the red.
-
-**The Green Means Checked Rule.** Green appears only for something verified, approved or passing.
+**The Key Colour Is The State Rule.** A key's colour carries its state; its glyph names the thing. Never encode the same state in a second colour on the same element.
 
 ## Typography
 
-**Body Font:** Source Sans 3 (bundled, OFL; Regular, Semibold, Bold)
-**Mono Font:** Source Code Pro (bundled, OFL; Regular, Semibold), always with tabular figures
+**Display Font:** Manrope (self-hosted, 400/600/800, OFL)
+**Body Font:** Manrope
+**Label/Mono Font:** JetBrains Mono (self-hosted, 400/600, OFL), with tabular figures
 
-**Character:** A plain, legible humanist sans for everything you read, and a technical mono for everything you would copy: repository names, commits, line ranges, ids, dates, counts and run lines. Hierarchy comes from size and weight, never from colour or case.
+**Character:** One geometric sans carries everything; hierarchy comes from size and the 800 weight, with slight negative tracking on the large sizes. Mono is the instrument readout, reserved for machine facts.
 
 ### Hierarchy
-- **Display** (700, 30px, 1.2, -0.3px): the editable task title at desktop width.
-- **Headline** (700, 24px, 1.25): the task title on phones (under 600px). A 28px bold step exists in the theme and is used, in mono, for the worker pairing code.
-- **Title Large** (700, 20px, 1.3): app bar titles, the spec's own title, dialog titles.
-- **Title** (700, 17px, 1.35): spec section headings (Summary, Requirements, Evidence in the repository) and the Activity heading. Sentence case, unnumbered.
-- **Title Small** (600, 15px, 1.35): task row titles and column names.
-- **Body Large** (400, 16px, 1.5): spec prose, held to a 680px measure inside the spec column.
-- **Body** (400, 15px, 1.5): default UI text, list tiles, inputs, dialogs.
-- **Body Small** (400, 13.5px, 1.45, muted): secondary lines, retry notes, expiry notes.
-- **Label** (600, 15px / 13.5px / 12.5px): buttons, chips and the column tag.
-- **Mono** (Source Code Pro, one pixel smaller than the style it replaces, tabular figures): header block lines at 12.5-13px with 1.7 line height; evidence references at 14px.
+- **Display** (800, 30px, 1.2, -0.4px): the task title.
+- **Headline** (800, 24-28px, 1.2-1.25): page titles.
+- **Title** (800, 20px, 1.3): dialog titles; **Title small** (800, 16px): app bar title, section headings beside a colour key, "Activity".
+- **Body large** (400, 16px, 1.55): spec prose, at a 680px max measure.
+- **Body** (400, 14.5px, 1.5): UI text, inputs, list rows; **Body small** (400, 13px, muted): secondary lines.
+- **Label** (800, 14.5px): buttons; **Label medium** (600, 13px): chips, pills, tooltips; **Label small** (600, 12px, muted, lowercase copy): screen-cell labels and lifecycle stage names.
+- **Mono** (JetBrains Mono, one pixel under the role it replaces, tabular): screen readouts (600, 15px), commits, paths, line ranges, counts, ids, dates, repo names, issue numbers.
 
 ### Named Rules
-**The Copyable Is Mono Rule.** If a reader might paste it into a terminal or a search box (a path, a commit, a line range, a timestamp, a count), it is set in Source Code Pro with tabular figures. Prose and labels never are.
-
-**The Small Caps Keyword Rule.** Normative keywords render in normative red, bold, with the `c2sc` small-caps feature and 0.6px tracking, as the RFC 2119 convention asks. No other text uses small caps, uppercase or tracking.
+**The Mono Is Data Rule.** JetBrains Mono is for data only: commits, paths, counts, ids, dates. Never for headings, labels, buttons or prose. The one typographic exception is the key-cap, which sets the agent's own normative keyword as a token.
 
 ## Layout
 
-The task page at 1100px and wider is a spec column (max 900px, 48px side padding, 32px top) beside a 360px side-field activity rail. Below 1100px the rail drops away and padding falls to 16px (24px top). Inside the column, prose keeps a 680px measure, so the header block and hairlines run wider than the text. A bar pinned under the column carries the spec actions on a paper ground above a hairline.
+The task page is the reference composition. At 1100px and wider it is a spec column (max 900px, prose at 680px) beside a fixed 360px activity rail on the side field; below 1100px the rail stacks under the spec. Spec actions sit in a bar pinned under the spec column with a top seam. The app bar is 56px with a round back key, a title and a mono repo name.
 
-The board is a horizontally scrolling run of lanes, 288px wide (85% of the viewport under 600px), 16px apart, 16px from the edge, under a full-width header block. Sign-in caps at 420px and the workers screen at 480px. The app bar is 56px tall with a hairline under it.
-
-Spacing steps through 4, 8, 12, 16, 24 and 48px. List rows are 6px vertical with a hairline between them; spec section headings sit 22px above their first row.
-
-**The Header Block Rule.** A screen that has a subject opens with a HeaderBlock: mono lines, 8px vertical padding, a 2px ink rule above and a 1px ink rule below. On the spec it splits into a left column (Repository; Version · commit · refiner on worker) and a right-aligned column (Status, Readiness, Evidence), and stacks below 560px.
+Home and Workers centre an 880px column with side padding that grows with the window. Board lanes are 288px wide, or 85% of the screen under 600px, so the next lane peeks in. Spacing runs on 4/8/12/16/20/24/48; the screen strip uses 20px horizontal by 16px vertical padding, 28px between cells and 14px between rows. Prose rows separate with 8px vertical padding over a bottom seam. Every layout works at a 360px phone width.
 
 ## Elevation & Depth
 
-Flat. Every surface sits at elevation 0, tint-free; depth comes from the side-field tone and from hairlines. Shadows appear only while something is held in the hand.
+Flat. Every Material elevation is 0 and surface tint is off. Depth is tonal: shell, sheet and side field differ by a few lightness steps, and a one-pixel seam outlines every sheet. Hover darkens a card's seam to ink; keyboard focus is a 2px ring (ink in light, near-white in dark). A dragged card is the same sheet with an ink seam, at full strength, and the slot it left is an empty seam outline.
 
-### Shadow Vocabulary
-- **Card in hand** (`box-shadow: 0 6px 16px rgba(26,26,26,0.18)`): the task row being dragged on the board.
-- **Lane in hand** (Material elevation 3, shadow ink at 25%): a board column being reordered.
-
-**The Only Lifted Thing Rule.** Nothing casts a shadow at rest. A shadow means "you are moving this", and disappears when it drops.
+### Named Rules
+**The No-Lift Rule.** No shadows, gradients, glass or blur anywhere, including dragged cards, menus, dialogs and snackbars. If something needs to stand forward, it gets a seam or the black screen, not a shadow.
 
 ## Shapes
 
-Square-ish and quiet. Controls, cards, task rows, lanes, dialogs and menus use a 6px radius. Status chips, the column tag and tooltips use a tighter 4px. Borders are 1px hairlines in the rule colour; ink borders are kept for outlined buttons, the column tag, hovered task rows and the header block. Timeline dots are 11px circles with a 1.5px border: solid ink for the newest event, hollow (filled with the ground colour) for the rest, threaded on a hairline.
+Two silhouettes: the round key and the pill. Status keys (worker, sign-in, home board) and lifecycle stages are circles; every button, chip and status pill is a stadium. Rectangles step up with their role: key-caps 4px, controls and fields 10px, cards 12px, the screen strip and dialogs 14px. Small heading and activity keys are rounded squares with a radius of 28% of their size. Line glyphs follow Lucide's 24-grid at stroke 2 (1.75 at 16px and under).
 
 ## Components
 
 ### Buttons
-Restrained and square-shouldered; the colour of the fill is the only hierarchy.
-- **Shape:** 6px radius, 40px tall, 18px horizontal padding, label type (600, 15px), no elevation, no splash.
-- **Normative:** normative-red fill with paper text. Only for the one act of the screen (Approve spec, Refine with AI). Focus draws a 2px ink border.
-- **Primary (default filled):** ink fill with paper text, 1px ink border. Focus draws a 2px normative-red border. Disabled is side-field with muted text.
-- **Outlined:** paper ground, ink text, 1px ink border (Refine again). Focus is a 2px ink ring.
-- **Text:** ink text, no border at rest, 2px focus ring (Save, Delete, Cancel).
-- **Destructive confirm:** the danger fill inside a confirm dialog, the one red a confirm may carry.
-- **Hover / Focus:** hover is a 5% ink wash; transitions run 120ms.
+- **Shape:** pill (stadium), 42px minimum height, 20px horizontal padding, 18px glyph, Label type.
+- **Ink (default filled):** ink fill, sheet text, ink border. "Refine with AI", dialog confirms, Save.
+- **Live:** orange fill, near-black ink, orange border. Approve spec only.
+- **Outline:** sheet fill, ink text, 1.5px ink border. "Refine again", "Cancel" on a run, "Connect".
+- **Danger:** red fill, sheet text. The confirm dialog's destructive action.
+- **Text / icon:** ink text, no fill; icon buttons are 40px circles in ink secondary.
+- **Hover / Focus:** no splash; a 5% ink hover wash; focus is a 2px ring. 120ms state changes.
 
 ### Chips
-- **StatusChip:** 4px radius, label-medium, compact. Tones: neutral (ink text, ink outline), quiet (muted text, rule outline), active (ink fill, paper text: Running, Spec ready for review), good (green on green-soft), bad (red on red-soft).
-- **Column tag:** a 28px text button with an ink border and an expand chevron next to the task title; it moves the task between columns.
+- **Style:** side-field fill, no border, pill, Label medium.
+- **Status pill:** the card's "Spec ready for review" is an orange pill with a 14px spec glyph that plays once on arrival.
 
 ### Cards / Containers
-- **Corner Style:** 6px.
-- **Background:** paper (sheet-dark in dark) with a 1px rule border, elevation 0.
-- **Task row:** a paper sheet on the side-field lane; the border turns ink on hover and becomes the 2px focus ring on keyboard focus. While dragged it leaves an empty hairline outline of the same size.
-- **Live run panel:** side-field, 6px, 16px padding, a 2px ink progress line on a rule track, then mono run events separated by hairlines.
+- **Corner Style:** 12px.
+- **Background:** sheet on the side-field lane, in both themes.
+- **Shadow Strategy:** none (see Elevation).
+- **Border:** one-pixel seam; ink on hover; 2px focus ring alone on keyboard focus.
+- **Behaviour:** at rest a card shows state as glyphs (spinning run arc while refining, the ready pill, the GitHub badge); the words behind a glyph-only state come up on hover or focus. Touch devices long-press to drag.
 
 ### Inputs / Fields
-- **Style:** filled paper, 1px rule border, 6px radius, 12px padding, dense. The floating label renders at 12px in muted semibold.
-- **Focus:** the border becomes a 2px ink ring.
-- **Error / Disabled:** a danger border (2px when focused); disabled borders fade to 55%.
-- **In-place fields:** the task title and brief are borderless at rest on the paper ground and show the focus ring only when edited.
+- **Style:** sheet fill, one-pixel seam, 10px radius, 13px/14px padding, muted labels and hints.
+- **Focus:** 2px focus-colour border.
+- **Error / Disabled:** red border (2px when focused); disabled seam at 55% alpha.
 
 ### Navigation
-- **App bar:** 56px, paper, flat, a hairline underneath, a back chevron and a title-large title, followed on the task page by a muted mono "· owner/repo". Icon buttons are 40px in ink-secondary.
-- **Routes:** a 200ms ease-out fade; none when the OS asks for reduced motion.
+- **App bar:** shell background, bottom seam, no elevation, 56px, Title small. The back button is the same glyph key on every route. Route changes are a 200ms fade, none under reduced motion.
 
-### Spec View (signature)
-The header block, then the spec title, Summary, Requirements, Acceptance criteria, Open questions and a numbered Suggested approach as plain hairline-separated rows (bullets, or numbers for the approach), and finally "Evidence in the repository": each entry is `[En]`, `path:start-end` and a mark in mono, with the agent's note beneath. A verified mark is green; an unverified one is muted with a dashed underline and a tooltip that explains it. Sections are unnumbered.
+### Glyph Key
+A round synth key: a coloured disc carrying one Lucide glyph at 56% of its diameter (32px default, 28px in the task bar). The colour is the state. Square variants (18px headings, 26px activity rows) carry the glyph in sheet colour at 66%.
 
-### Activity Rail (signature)
-A 360px side-field column, newest event first, on a hairline timeline. The newest dot is solid ink; earlier dots are hollow. Each event has a body line and a mono timestamp.
+### Screen Strip
+The black screen (14px radius, 20/16px padding) holding a wrap of cells. Each cell is a 26px glyph or a readiness dial, then a tiny lowercase label in screen muted over a mono 15px/600 value in screen ink. An optional footer line sits 14px under the cells on the same screen. On the task page the footer is the status readout: a 16px glyph, the status in its key colour ("Ready for review" orange, "Approved" green, "Being rewritten" muted), then version, commit and harness in mono.
+
+### Lifecycle Strip
+The run's stages (queued, claimed, reading, spec ready, approved) as 24px circles on one baseline joined by 2px lines: done stages are ink with a check, the current stage is orange (with the spinning arc while live), future stages are sheet with a seam. Stage names in Label small.
+
+### Key-cap
+RFC 2119 keywords the agent wrote (MUST, SHOULD, MAY, SHALL, REQUIRED and their NOT forms) render inline as dark key-caps: ink fill, sheet text, mono 600 at 80% of the prose size, 4px radius. The app adds none of its own.
+
+### Glyph Motion
+- **Still** is the default and covers every glyph that is not live.
+- **Loop** only while work runs: refinement queued or running (the run arc spins once per 1400ms), outbox sending, CI running, waiting for a worker. Loops keep the glyph's own tempo.
+- **Once** when a state arrives: worker online or busy, spec ready, approved, readiness reached. One beat: 400ms, ease-out-back (one small overshoot).
+- **No hover animation.**
+- **Reduced motion** freezes everything: loops stop, one-shots do not play, dials jump to value, route fades are removed.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** open every screen that has a subject with the HeaderBlock: mono lines between a 2px ink rule and a 1px ink rule.
-- **Do** keep one normative-red fill per screen, on the act the screen exists for; give every other action ink, an outline or plain text.
-- **Do** set paths, commits, line ranges, ids, dates and counts in Source Code Pro with tabular figures.
-- **Do** separate rows with 1px rule-colour hairlines instead of boxing them.
-- **Do** use the side field for things that sit beside the page (rail, lanes, run panel) and paper for things on it.
-- **Do** read colours and faces through the theme tokens; no literal Color or font family outside the theme file.
+- **Do** reserve orange for live or awaiting-you states: the running refinement, "Spec ready for review", and Approve spec.
+- **Do** render "Refine with AI" as an ink button and "Refine again" as an outline button.
+- **Do** keep glyphs still by default; loop only while work runs (refinement queued or running, outbox sending, CI running, waiting for a worker) and play once when a state arrives.
+- **Do** freeze every glyph, dial and transition under reduced motion.
+- **Do** use at most one black screen strip per screen, and only when it carries live or summary state. On home it appears only when items are unsent or the app is offline; on the task page its footer is the status readout.
+- **Do** set the agent's MUST/SHOULD keywords as dark key-caps (ink fill, sheet text, mono 600, 4px radius).
+- **Do** use JetBrains Mono for data only: commits, paths, line ranges, counts, ids, dates.
+- **Do** separate surfaces with the three neutral fields and one-pixel seams.
+- **Do** name icons by job through the Glyph enum; screens never reference a library icon class.
 
 ### Don't:
-- **Don't** colour a keyword the agent did not write, or use the normative red for decoration, links or emphasis.
-- **Don't** use green for anything except verified, approved or passing.
-- **Don't** cast a shadow at rest or nest a card inside a card.
-- **Don't** add section numbers, uppercase labels or tracked type; small caps belong only to normative keywords.
-- **Don't** bring back the indigo-accented grey tracker look or the warm-paper ledger this replaced.
+- **Don't** use orange to start work, decorate, or mark focus on idle content.
+- **Don't** add hover animation to glyphs.
+- **Don't** put a second screen strip on a screen, or show one that carries only static decoration.
+- **Don't** set headings, labels, buttons or prose in mono.
+- **Don't** use shadows, gradients, glass or blur, including on dragged cards and overlays.
+- **Don't** add colours, font families or radii outside the tokens in this file.
+
+## Open Gaps
+
+- The home page has no workers-online or specs-ready cell; adding one needs an API call that does not exist yet.
+- With no spec and an inactive run, the task strip's run cell shows a still run glyph (an empty ring with an arc) where a clearer idle glyph would read better.

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
@@ -21,6 +22,10 @@ class HomePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final workspaces = ref.watch(workspacesProvider);
+    final unsent = ref
+        .watch(outboxProvider)
+        .where((d) => d.error == null)
+        .length;
     final api = ref.read(apiProvider);
 
     Future<void> newWorkspace() async {
@@ -61,7 +66,7 @@ class HomePage extends ConsumerWidget {
         actions: [
           IconButton(
             tooltip: 'Workers',
-            icon: const Icon(Icons.computer_outlined),
+            icon: const GlyphIcon(Glyph.worker),
             onPressed: () => context.go('/workers'),
           ),
           Center(
@@ -76,7 +81,7 @@ class HomePage extends ConsumerWidget {
           ),
           IconButton(
             tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
+            icon: const GlyphIcon(Glyph.logout),
             onPressed: () async {
               final unsent = ref.read(outboxProvider).length;
               if (unsent > 0 &&
@@ -108,25 +113,26 @@ class HomePage extends ConsumerWidget {
         AsyncValue(:final value?) => ListView(
           padding: EdgeInsets.fromLTRB(side, 24, side, 48),
           children: [
-            HeaderBlock(
-              lines: [
-                'Workspaces: ${value.items.length} · '
-                    'Boards: ${value.items.fold(0, (n, ws) => n + ws.boards.length)}',
-              ],
-            ),
-            if (value.offline)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Row(
-                  children: [
-                    Icon(Icons.cloud_off_outlined, size: 18, color: t.muted),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Offline: showing the copy saved on this device.',
-                        style: quiet,
+            if (unsent > 0 || value.offline)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: ScreenStrip(
+                  cells: [
+                    if (unsent > 0)
+                      ScreenCell(
+                        glyph: Glyph.outbox,
+                        label: 'unsent',
+                        value: '$unsent',
+                        motion: value.offline
+                            ? GlyphMotion.still
+                            : GlyphMotion.loop,
                       ),
-                    ),
+                    if (value.offline)
+                      const ScreenCell(
+                        glyph: Glyph.offline,
+                        label: 'offline',
+                        value: 'saved copy',
+                      ),
                   ],
                 ),
               ),
@@ -144,7 +150,7 @@ class HomePage extends ConsumerWidget {
                   ),
                   TextButton.icon(
                     onPressed: () => newBoard(ws),
-                    icon: const Icon(Icons.add, size: 18),
+                    icon: const GlyphIcon(Glyph.add, size: 18),
                     label: const Text('New board'),
                   ),
                 ],
@@ -180,16 +186,26 @@ class HomePage extends ConsumerWidget {
             const SizedBox(height: 16),
             Align(
               alignment: Alignment.centerLeft,
-              child: OutlinedButton(
+              child: OutlinedButton.icon(
                 onPressed: () => ref.invalidate(workspacesProvider),
-                child: const Text('Retry'),
+                icon: const GlyphIcon(Glyph.ci, size: 18),
+                label: const Text('Retry'),
               ),
             ),
           ],
         ),
-        _ => Align(
-          alignment: Alignment.topCenter,
-          child: LinearProgressIndicator(color: t.muted),
+        _ => Padding(
+          padding: const EdgeInsets.only(top: 48),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: GlyphIcon(
+              Glyph.run,
+              size: 28,
+              color: t.muted,
+              motion: GlyphMotion.loop,
+              semanticLabel: 'Loading',
+            ),
+          ),
         ),
       },
     );
@@ -224,7 +240,7 @@ class _BoardRow extends StatelessWidget {
       style:
           TextButton.styleFrom(
             alignment: Alignment.centerLeft,
-            minimumSize: const Size.fromHeight(48),
+            minimumSize: const Size.fromHeight(52),
             padding: const EdgeInsets.symmetric(horizontal: 8),
             foregroundColor: t.ink,
             textStyle: text.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
@@ -241,9 +257,11 @@ class _BoardRow extends StatelessWidget {
           ),
       child: Row(
         children: [
+          GlyphKey(Glyph.board, color: t.paper2, size: 28),
+          const SizedBox(width: 12),
           Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
           const SizedBox(width: 8),
-          Icon(Icons.chevron_right, size: 20, color: t.muted),
+          GlyphIcon(Glyph.next, color: t.muted),
         ],
       ),
     );

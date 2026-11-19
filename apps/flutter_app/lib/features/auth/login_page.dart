@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
 import '../../core/theme.dart';
-import '../../core/widgets.dart';
 import 'auth.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -61,12 +61,31 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   style: theme.textTheme.bodyMedium?.copyWith(color: t.muted),
                 ),
                 const SizedBox(height: 24),
-                // What the code proves about sign-in: which API it asks, and that a login name is all it takes.
-                HeaderBlock(
-                  lines: [
-                    'Server: ${Uri.base.resolve(apiUrl)}',
-                    'Sign-in: login name, no password',
-                  ],
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: t.screen,
+                    borderRadius: BorderRadius.circular(Tokens.radiusScreen),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        GlyphKey(Glyph.worker, color: t.idle, size: 32),
+                        const SizedBox(width: 14),
+                        // What the code proves about sign-in: which API it asks, and that a login name is all it takes.
+                        Expanded(
+                          child: Text(
+                            'Server: ${Uri.base.resolve(apiUrl)}\nSign-in: login name, no password',
+                            style: t.mono(
+                              theme.textTheme.bodySmall!.copyWith(
+                                color: t.screenInk,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 24),
                 // 8px vertical padding brings the field to the button's 40px.

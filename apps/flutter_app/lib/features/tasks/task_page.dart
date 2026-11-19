@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../agents/refinement.dart';
+import '../agents/workers.dart';
 import '../boards/board_page.dart';
 import '../github/github.dart';
 
@@ -34,7 +36,7 @@ class TaskPage extends ConsumerWidget {
                     TextSpan(text: board.name),
                     if (board.repository case final repository?)
                       TextSpan(
-                        text: ' · $repository',
+                        text: '   $repository',
                         style: t
                             .mono(theme.textTheme.bodyMedium!)
                             .copyWith(color: t.muted),
@@ -44,6 +46,7 @@ class TaskPage extends ConsumerWidget {
                 style: theme.textTheme.titleMedium,
                 overflow: TextOverflow.ellipsis,
               ),
+        actions: const [_WorkerKey(), SizedBox(width: 12)],
       ),
       body: switch (detail) {
         AsyncValue(:final value?) when board != null => _TaskEditor(
@@ -154,6 +157,15 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
             ),
           ),
         );
+        final edits = [
+          TextButton(onPressed: _save, style: quiet, child: const Text('Save')),
+          TextButton.icon(
+            onPressed: _delete,
+            style: quiet,
+            icon: const GlyphIcon(Glyph.delete, size: 18),
+            label: const Text('Delete'),
+          ),
+        ];
         final doc = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -193,6 +205,12 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                // Wide: Save and Delete join the title row so the brief runs straight into the strip.
+                if (wide)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: edits),
+                  ),
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: _ColumnTag(
@@ -230,27 +248,14 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
                 ),
               ),
             ),
-            const SizedBox(height: 4),
-            // Save at the column edge, the destructive Delete at the far end; both quiet.
-            Transform.translate(
-              offset: const Offset(-8, 0),
-              child: Row(
-                children: [
-                  TextButton(
-                    onPressed: _save,
-                    style: quiet,
-                    child: const Text('Save'),
-                  ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _delete,
-                    style: quiet,
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    label: const Text('Delete'),
-                  ),
-                ],
+            if (!wide) ...[
+              const SizedBox(height: 4),
+              // Narrow: Save at the column edge, the destructive Delete at the far end; both quiet.
+              Transform.translate(
+                offset: const Offset(-8, 0),
+                child: Row(children: [edits.first, const Spacer(), edits.last]),
               ),
-            ),
+            ],
             const SizedBox(height: 16),
             RefinementPanel(
               boardId: widget.boardId,
@@ -260,7 +265,7 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
             GitHubPanel(boardId: widget.boardId, taskId: task.id),
             if (!wide) ...[
               const SizedBox(height: 48),
-              _ActivityList(activity: widget.detail.activity, ground: t.paper),
+              _ActivityList(activity: widget.detail.activity),
             ],
           ],
         );
@@ -296,10 +301,7 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
               ),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(32, 32, 32, 24),
-                child: _ActivityList(
-                  activity: widget.detail.activity,
-                  ground: t.paper3,
-                ),
+                child: _ActivityList(activity: widget.detail.activity),
               ),
             ),
           ],
@@ -312,7 +314,7 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
 /// Wide enough for the spec column beside the 360px activity rail.
 const _wide = 1100.0;
 
-/// The task's column as a small ink-ruled tag; opening it moves the task to another column.
+/// The task's column as a small pill; opening it moves the task to another column.
 class _ColumnTag extends StatelessWidget {
   const _ColumnTag({
     required this.name,
@@ -340,7 +342,7 @@ class _ColumnTag extends StatelessWidget {
         child: TextButton.icon(
           onPressed: () => menu.isOpen ? menu.close() : menu.open(),
           iconAlignment: IconAlignment.end,
-          icon: const Icon(Icons.expand_more, size: 16),
+          icon: const GlyphIcon(Glyph.expand, size: 16),
           label: Text(name),
           style:
               TextButton.styleFrom(
@@ -348,14 +350,12 @@ class _ColumnTag extends StatelessWidget {
                 padding: const EdgeInsets.only(left: 8, right: 4),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 textStyle: Theme.of(context).textTheme.labelMedium,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4),
-                ),
+                shape: const StadiumBorder(),
               ).copyWith(
                 side: WidgetStateProperty.resolveWith(
                   (s) => s.contains(WidgetState.focused)
                       ? BorderSide(color: t.focus, width: 2)
-                      : t.inkRule,
+                      : t.hairline,
                 ),
               ),
         ),
@@ -364,12 +364,32 @@ class _ColumnTag extends StatelessWidget {
   }
 }
 
-class _ActivityList extends StatelessWidget {
-  const _ActivityList({required this.activity, required this.ground});
-  final List<Activity> activity;
+/// The bar's right key: green while one of the viewer's workers is online, grey otherwise.
+class _WorkerKey extends ConsumerWidget {
+  const _WorkerKey();
 
-  /// What the list sits on, so the hollow dots read as holes in the line.
-  final Color ground;
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final workers = ref.watch(workersProvider).value;
+    if (workers == null || workers.isEmpty) return const SizedBox.shrink();
+    final t = context.tokens;
+    final online = workers.any((w) => w.state != 'offline');
+    return IconButton(
+      tooltip: online ? 'Worker online' : 'Workers offline',
+      onPressed: () => context.push('/workers'),
+      icon: GlyphKey(
+        online ? Glyph.worker : Glyph.workerOff,
+        color: online ? t.green : t.idle,
+        size: 28,
+        motion: online ? GlyphMotion.once : GlyphMotion.still,
+      ),
+    );
+  }
+}
+
+class _ActivityList extends StatelessWidget {
+  const _ActivityList({required this.activity});
+  final List<Activity> activity;
 
   static String describe(Activity a) => switch (a.kind) {
     'created' => 'created this in ${a.data['column']}',
@@ -388,6 +408,19 @@ class _ActivityList extends StatelessWidget {
     _ => a.kind,
   };
 
+  /// The event's key: blue for the AI's reading and writing, green once approved, red on failure, grey at rest.
+  static (Glyph, Color, Color?) look(Activity a, Tokens t) => switch (a.kind) {
+    'created' => (Glyph.add, t.ink, null),
+    'refinement_requested' => (Glyph.refine, t.blue, null),
+    'spec_ready' => (Glyph.spec, t.blue, null),
+    'spec_approved' => (Glyph.approve, t.green, null),
+    'refinement_failed' => (Glyph.failed, t.danger, null),
+    'github_issue_created' => (Glyph.github, t.ink, null),
+    'moved' => (Glyph.board, t.idle, t.ink),
+    'updated' => (Glyph.edit, t.idle, t.ink),
+    _ => (Glyph.activity, t.idle, t.ink),
+  };
+
   static String time(DateTime t) =>
       '${t.year}-${_pad(t.month)}-${_pad(t.day)} ${_pad(t.hour)}:${_pad(t.minute)}';
   static String _pad(int n) => n.toString().padLeft(2, '0');
@@ -397,67 +430,43 @@ class _ActivityList extends StatelessWidget {
     final theme = Theme.of(context);
     final t = context.tokens;
     final body = theme.textTheme.bodyMedium!;
-    final newest = activity.reversed.toList();
-    Widget rail(double height) => SizedBox(
-      width: 1,
-      height: height,
-      child: ColoredBox(color: t.rule),
-    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text('Activity', style: theme.textTheme.titleMedium),
-        const SizedBox(height: 16),
-        for (final (i, a) in newest.indexed)
-          IntrinsicHeight(
+        const SizedBox(height: 8),
+        for (final (i, a) in activity.reversed.indexed)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // The timeline: a hairline through every dot; the newest dot is solid ink.
-                SizedBox(
-                  width: 11,
-                  child: Column(
-                    children: [
-                      i == 0 ? const SizedBox(height: 6) : rail(6),
-                      Container(
-                        width: 11,
-                        height: 11,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: i == 0 ? t.ink : ground,
-                          border: Border.all(
-                            color: i == 0 ? t.ink : t.muted,
-                            width: 1.5,
-                          ),
-                        ),
-                      ),
-                      if (i < newest.length - 1)
-                        Expanded(child: rail(double.infinity)),
-                    ],
+                switch (look(a, t)) {
+                  (final glyph, final colour, final ink) => SquareKey(
+                    glyph,
+                    color: colour,
+                    ink: ink,
+                    size: 26,
                   ),
-                ),
+                },
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      bottom: i < newest.length - 1 ? 16 : 0,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${a.actor} ${describe(a)}',
-                          style: i == 0
-                              ? body.copyWith(fontWeight: FontWeight.w600)
-                              : body,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          time(a.createdAt),
-                          style: t.mono(theme.textTheme.bodySmall!),
-                        ),
-                      ],
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${a.actor} ${describe(a)}',
+                        // The newest event is set a little heavier.
+                        style: i == 0
+                            ? body.copyWith(fontWeight: FontWeight.w600)
+                            : body,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        time(a.createdAt),
+                        style: t.mono(theme.textTheme.bodySmall!),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -468,19 +477,19 @@ class _ActivityList extends StatelessWidget {
   }
 }
 
-/// A still outline of the page while the task loads: title, brief, the header block's rules, and the rail.
+/// A still outline of the page while the task loads: title, brief, the screen strip, a few rows, and the rail.
 class _Skeleton extends StatelessWidget {
   const _Skeleton();
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    Widget bar(double height, {double? width}) => Container(
+    Widget bar(double height, {double? width, double radius = 4}) => Container(
       height: height,
       width: width,
       decoration: BoxDecoration(
         color: t.rule,
-        borderRadius: BorderRadius.circular(2),
+        borderRadius: BorderRadius.circular(radius),
       ),
     );
     return ExcludeSemantics(
@@ -498,14 +507,12 @@ class _Skeleton extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    bar(24, width: 320),
-                    const SizedBox(height: 24),
-                    bar(80),
-                    const SizedBox(height: 16),
-                    bar(40, width: 88),
-                    const SizedBox(height: 48),
-                    bar(2),
+                    bar(30, width: 360),
                     const SizedBox(height: 12),
+                    bar(16, width: 240),
+                    const SizedBox(height: 48),
+                    bar(64, radius: Tokens.radiusScreen),
+                    const SizedBox(height: 28),
                     bar(12, width: 240),
                     const SizedBox(height: 8),
                     bar(12, width: 180),

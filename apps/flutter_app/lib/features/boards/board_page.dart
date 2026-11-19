@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
@@ -155,7 +156,7 @@ class BoardPage extends ConsumerWidget {
           if (board != null)
             PopupMenuButton<String>(
               tooltip: 'Repository',
-              icon: const Icon(Icons.link),
+              icon: const GlyphIcon(Glyph.link),
               onSelected: (choice) async {
                 if (choice != 'disconnect') return connect();
                 if (await confirm(
@@ -188,7 +189,7 @@ class BoardPage extends ConsumerWidget {
             ),
           IconButton(
             tooltip: 'Add column',
-            icon: const Icon(Icons.view_column_outlined),
+            icon: const GlyphIcon(Glyph.board),
             onPressed: () async {
               final name = await promptText(
                 context,
@@ -206,19 +207,19 @@ class BoardPage extends ConsumerWidget {
       body: board != null
           ? Column(
               children: [
-                _HeaderBlock(
+                _BoardStrip(
                   board: board,
                   drafts: drafts.where((d) => d.error == null).length,
                   onConnect: connect,
                 ),
                 if (board.offline)
                   const _Notice(
-                    icon: Icons.cloud_off_outlined,
+                    glyph: Glyph.offline,
                     text: 'Offline: showing the copy saved on this device. New tasks are sent when the connection is back.',
                   ),
                 for (final d in drafts.where((d) => d.error != null))
                   _Notice(
-                    icon: Icons.error_outline,
+                    glyph: Glyph.error,
                     text: 'Couldn\'t save "${d.title}": ${d.error}',
                     action: TextButton(
                       onPressed: () =>
@@ -235,10 +236,30 @@ class BoardPage extends ConsumerWidget {
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
-                child: Text(
-                  errorMessage(async.error!),
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium!.copyWith(color: t.muted),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GlyphIcon(
+                      Glyph.error,
+                      size: 28,
+                      color: t.muted,
+                      motion: GlyphMotion.still,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      errorMessage(async.error!),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium!.copyWith(
+                        color: t.muted,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: () => ref.invalidate(boardProvider(boardId)),
+                      icon: const GlyphIcon(Glyph.ci, size: 18),
+                      label: const Text('Retry'),
+                    ),
+                  ],
                 ),
               ),
             )
@@ -247,9 +268,9 @@ class BoardPage extends ConsumerWidget {
   }
 }
 
-/// The draft's header block: the repository the board refines against, and where its cards stand.
-class _HeaderBlock extends StatelessWidget {
-  const _HeaderBlock({
+/// The board's screen strip: the repository it refines against and where its cards stand, as glyphs and counts.
+class _BoardStrip extends StatelessWidget {
+  const _BoardStrip({
     required this.board,
     required this.drafts,
     required this.onConnect,
@@ -258,82 +279,59 @@ class _HeaderBlock extends StatelessWidget {
   final int drafts;
   final VoidCallback onConnect;
 
-  static const _states = {
-    'ready': 'Ready for review',
-    'running': 'Refining',
-    'queued': 'Waiting',
-    'approved': 'Approved',
-    'failed': 'Failed',
-  };
-
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
     final tasks = [for (final c in board.columns) ...c.tasks];
-    final counts = [
-      for (final MapEntry(:key, :value) in _states.entries)
-        if (tasks.where((task) => task.refinement == key).length case final n
-            when n > 0)
-          '$value: $n',
-    ];
-    return _HeaderRules(
-      left: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('Repository: '),
-          if (board.repository case final repository?)
-            Flexible(child: Text(repository, overflow: TextOverflow.ellipsis))
-          else ...[
-            Flexible(
-              child: Text(
-                'not connected',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: t.muted),
-              ),
-            ),
-            const SizedBox(width: 8),
-            TextButton(
-              style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-              onPressed: onConnect,
-              child: const Text('Connect'),
-            ),
-          ],
-        ],
-      ),
-      right: Text(
-        counts.isEmpty ? 'Tasks: ${tasks.length + drafts}' : counts.join(' · '),
-      ),
-    );
-  }
-}
-
-/// The header block's frame: a 2px ink rule above, a 1px ink rule below, mono lines between,
-/// [left] at the start and [right] at the end (the next line down when they don't fit side by side).
-class _HeaderRules extends StatelessWidget {
-  const _HeaderRules({required this.left, required this.right});
-  final Widget left, right;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
+    int count(bool Function(String?) test) =>
+        tasks.where((task) => test(task.refinement)).length;
+    final ready = count((r) => r == 'ready');
+    final waiting = count((r) => r == 'queued' || r == 'running');
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          border: Border(top: t.headRule, bottom: t.inkRule),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: DefaultTextStyle.merge(
-            style: t.mono(Theme.of(context).textTheme.bodyMedium!),
-            child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 24,
-              children: [left, right],
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            ScreenStrip(
+              cells: [
+                ScreenCell(
+                  glyph: Glyph.github,
+                  label: 'repository',
+                  value: board.repository ?? 'not connected',
+                  color: board.repository == null ? t.screenMuted : null,
+                ),
+                ScreenCell(
+                  glyph: Glyph.board,
+                  label: 'tasks',
+                  value: '${tasks.length + drafts}',
+                ),
+                ScreenCell(
+                  glyph: Glyph.spec,
+                  label: 'ready for review',
+                  value: '$ready',
+                  color: ready > 0 ? t.screenAccent : t.screenMuted,
+                  motion: ready > 0 ? GlyphMotion.once : GlyphMotion.still,
+                ),
+                ScreenCell(
+                  glyph: Glyph.waiting,
+                  label: 'waiting',
+                  value: '$waiting',
+                  color: waiting > 0 ? null : t.screenMuted,
+                  motion: waiting > 0 ? GlyphMotion.loop : GlyphMotion.still,
+                ),
+              ],
             ),
-          ),
+            if (board.repository == null)
+              OutlinedButton.icon(
+                onPressed: onConnect,
+                icon: const GlyphIcon(Glyph.github, size: 18),
+                label: const Text('Connect'),
+              ),
+          ],
         ),
       ),
     );
@@ -341,8 +339,8 @@ class _HeaderRules extends StatelessWidget {
 }
 
 class _Notice extends StatelessWidget {
-  const _Notice({required this.icon, required this.text, this.action});
-  final IconData icon;
+  const _Notice({required this.glyph, required this.text, this.action});
+  final Glyph glyph;
   final String text;
   final Widget? action;
 
@@ -354,7 +352,7 @@ class _Notice extends StatelessWidget {
       shape: Border(bottom: t.hairline),
       child: ListTile(
         dense: true,
-        leading: Icon(icon),
+        leading: GlyphIcon(glyph, color: t.ink2, motion: GlyphMotion.still),
         title: Text(text),
         trailing: action,
       ),
@@ -387,12 +385,13 @@ class _BoardView extends StatelessWidget {
           itemCount: board.columns.length,
           onReorderItem: (from, to) =>
               runWithFeedback(context, () => notifier.moveColumn(from, to)),
-          // A lifted lane: one soft shadow, no animated elevation.
+          // A lifted lane: an ink seam, no shadow.
           proxyDecorator: (child, _, _) => Material(
             color: t.paper,
-            elevation: 3,
-            shadowColor: t.ink.withValues(alpha: 0.25),
-            borderRadius: BorderRadius.circular(Tokens.radiusCard),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(Tokens.radiusCard),
+              side: BorderSide(color: t.ink),
+            ),
             child: child,
           ),
           itemBuilder: (context, i) => Padding(
@@ -414,7 +413,7 @@ class _BoardView extends StatelessWidget {
   }
 }
 
-/// Loading: the board's shape at rest (header block, lanes, rows) in rule-coloured bars, nothing moving.
+/// Loading: the board's shape at rest (screen strip, lanes, rows) in rule-coloured bars, nothing moving.
 class _BoardSkeleton extends StatelessWidget {
   const _BoardSkeleton();
 
@@ -432,7 +431,10 @@ class _BoardSkeleton extends StatelessWidget {
     return ExcludeSemantics(
       child: Column(
         children: [
-          _HeaderRules(left: bar(12, 200), right: bar(12, 160)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Align(alignment: Alignment.centerLeft, child: bar(58, 480)),
+          ),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) => ListView(
@@ -506,13 +508,11 @@ class _ColumnView extends ConsumerWidget {
     );
 
     // The lane is a paper3 side field and one full-height drop target (tests look the lane up by this
-    // Card); it takes a faint red tint only while a card hovers over its open ground.
+    // Card); it takes the seam colour only while a card hovers over its open ground.
     return DragTarget<Task>(
       onAcceptWithDetails: (d) => move(d.data, column.tasks.length),
       builder: (context, candidates, _) => Card(
-        color: candidates.isEmpty
-            ? t.paper3
-            : t.accentSoft.withValues(alpha: 0.5),
+        color: candidates.isEmpty ? t.paper3 : t.rule,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(Tokens.radiusCard),
         ),
@@ -529,10 +529,13 @@ class _ColumnView extends ConsumerWidget {
                       child: SizedBox(
                         width: 32,
                         height: 48,
-                        child: Icon(
-                          Icons.drag_indicator,
-                          size: 18,
-                          color: t.muted,
+                        child: Center(
+                          child: GlyphIcon(
+                            Glyph.drag,
+                            size: 18,
+                            color: t.muted,
+                            semanticLabel: 'Drag to reorder',
+                          ),
                         ),
                       ),
                     ),
@@ -543,9 +546,7 @@ class _ColumnView extends ConsumerWidget {
                         Flexible(
                           child: Text(
                             column.name,
-                            style: theme.textTheme.titleSmall!.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
+                            style: theme.textTheme.titleSmall,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -562,8 +563,7 @@ class _ColumnView extends ConsumerWidget {
                     ),
                   ),
                   PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_horiz),
-                    iconColor: t.muted,
+                    icon: GlyphIcon(Glyph.more, color: t.muted),
                     onSelected: (choice) async {
                       if (choice == 'rename') {
                         final name = await promptText(
@@ -628,15 +628,34 @@ class _ColumnView extends ConsumerWidget {
                         ],
                       ),
                     ),
+                  if (column.tasks.isEmpty && pending.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 12, 4, 4),
+                      child: Row(
+                        children: [
+                          GlyphIcon(
+                            Glyph.board,
+                            size: 16,
+                            color: t.idle,
+                            motion: GlyphMotion.still,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'No tasks yet',
+                            style: theme.textTheme.bodySmall!.copyWith(
+                              color: t.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   for (final d in pending)
                     Container(
                       margin: const EdgeInsets.only(top: 8),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         border: Border.fromBorderSide(t.hairline),
-                        borderRadius: BorderRadius.circular(
-                          Tokens.radiusControl,
-                        ),
+                        borderRadius: BorderRadius.circular(Tokens.radiusCard),
                       ),
                       child: Row(
                         children: [
@@ -652,12 +671,16 @@ class _ColumnView extends ConsumerWidget {
                             ),
                           ),
                           const SizedBox(width: 8),
+                          // Sending while online; at rest while offline, when nothing is moving.
                           Tooltip(
                             message: 'Saved on this device, waiting to sync',
-                            child: Icon(
-                              Icons.cloud_upload_outlined,
+                            child: GlyphIcon(
+                              Glyph.outbox,
                               size: 16,
                               color: t.muted,
+                              motion: board.offline
+                                  ? GlyphMotion.still
+                                  : GlyphMotion.loop,
                             ),
                           ),
                         ],
@@ -699,13 +722,81 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
     final t = context.tokens;
     final board = widget.board;
     final viewer = ref.watch(authProvider)?.user.login;
-    final chip = switch (task.refinement) {
-      'running' => ('Refining…', StatusTone.quiet),
-      'ready' => ('Spec ready for review', StatusTone.neutral),
-      'approved' => ('Spec approved', StatusTone.good),
-      'failed' => ('Refinement failed', StatusTone.bad),
+    final small = theme.textTheme.bodySmall!;
+    // At rest a card shows its state as glyphs; the words behind a glyph-only state come up on hover or focus.
+    final detail = switch (task.refinement) {
+      'running' => 'Refining…',
+      'failed' => 'Refinement failed',
       _ => null,
     };
+    final states = <Widget>[
+      if (task.refinement == 'running')
+        GlyphIcon(
+          Glyph.run,
+          size: 16,
+          color: t.accent,
+          motion: GlyphMotion.loop,
+          semanticLabel: detail,
+        ),
+      if (task.refinement == 'ready')
+        Container(
+          padding: const EdgeInsets.fromLTRB(6, 3, 10, 3),
+          decoration: BoxDecoration(
+            color: t.accent,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GlyphIcon(
+                Glyph.spec,
+                size: 14,
+                color: t.accentInk,
+                motion: GlyphMotion.once,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Spec ready for review',
+                style: theme.textTheme.labelMedium!.copyWith(
+                  color: t.accentInk,
+                ),
+              ),
+            ],
+          ),
+        ),
+      if (task.refinement == 'approved')
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GlyphIcon(
+              Glyph.verified,
+              size: 14,
+              color: t.green,
+              motion: GlyphMotion.still,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              'Spec approved',
+              style: theme.textTheme.labelMedium!.copyWith(color: t.green),
+            ),
+          ],
+        ),
+      if (task.refinement == 'failed')
+        GlyphIcon(
+          Glyph.failed,
+          size: 16,
+          color: t.danger,
+          motion: GlyphMotion.still,
+          semanticLabel: detail,
+        ),
+      if (task.github case final github?) GitHubBadge(github: github),
+    ];
+    final reveal = detail != null && (_hovered || _focused)
+        ? Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(detail, style: small.copyWith(color: t.muted)),
+          )
+        : const SizedBox(width: double.infinity);
     final body = Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -725,7 +816,12 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
               padding: const EdgeInsets.only(top: 8),
               child: Row(
                 children: [
-                  Icon(Icons.hourglass_empty, size: 14, color: t.muted),
+                  GlyphIcon(
+                    Glyph.waiting,
+                    size: 14,
+                    color: t.idle,
+                    motion: GlyphMotion.loop,
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -736,7 +832,7 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
                           'Waiting for a worker',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall,
+                      style: small,
                     ),
                   ),
                   if (board.waiting?.mine(viewer) ?? false)
@@ -744,20 +840,29 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
                 ],
               ),
             ),
-          if (chip case (final label, final tone))
+          if (states.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: StatusChip(label: label, tone: tone),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: states,
+              ),
             ),
-          if (task.github case final github?)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: GitHubBadge(github: github),
+          // AnimatedSize asserts at Duration.zero, so reduced motion skips it rather than zeroing it.
+          if (MediaQuery.disableAnimationsOf(context))
+            reveal
+          else
+            AnimatedSize(
+              duration: Tokens.durShort,
+              alignment: Alignment.topLeft,
+              child: reveal,
             ),
         ],
       ),
     );
-    final radius = BorderRadius.circular(Tokens.radiusControl);
+    final radius = BorderRadius.circular(Tokens.radiusCard);
     Widget sheet(BorderSide side, Widget child) => Material(
       color: t.paper2, // in front of the lane's paper3 field, in both themes
       animationDuration: Tokens.durMicro,
@@ -765,12 +870,12 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
       shape: RoundedRectangleBorder(borderRadius: radius, side: side),
       child: child,
     );
-    // A white row on the lane: the border goes ink on hover; keyboard focus is the theme's 2px ring, alone.
+    // A sheet on the lane: the seam goes ink on hover; keyboard focus is the theme's 2px ring, alone.
     final card = sheet(
       _focused
           ? BorderSide(color: t.focus, width: 2)
           : _hovered
-          ? t.inkRule
+          ? BorderSide(color: t.ink)
           : t.hairline,
       InkWell(
         onTap: () => context.go('/boards/${board.id}/tasks/${task.id}'),
@@ -780,21 +885,12 @@ class _TaskCardState extends ConsumerState<_TaskCard> {
         child: body,
       ),
     );
-    // The one lifted thing on the board: the card in hand, at full strength, on a soft offset shadow.
+    // The card in hand: full strength, an ink seam, no shadow.
     final feedback = Material(
       type: MaterialType.transparency,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: [
-            BoxShadow(
-              color: t.ink.withValues(alpha: 0.18),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        child: SizedBox(width: widget.width, child: sheet(t.hairline, body)),
+      child: SizedBox(
+        width: widget.width,
+        child: sheet(BorderSide(color: t.ink), body),
       ),
     );
     // The slot it left: an empty outline the same size as the task.
@@ -875,7 +971,7 @@ class _AddTaskFieldState extends ConsumerState<_AddTaskField> {
         fillColor: Colors.transparent,
         suffixIcon: IconButton(
           tooltip: 'Add task',
-          icon: Icon(Icons.add, color: t.muted),
+          icon: GlyphIcon(Glyph.add, color: t.muted),
           onPressed: _submit,
         ),
       ),
