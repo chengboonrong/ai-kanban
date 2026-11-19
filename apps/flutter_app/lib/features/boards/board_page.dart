@@ -13,6 +13,7 @@ import '../agents/refinement.dart';
 import '../auth/auth.dart';
 import '../github/github.dart';
 import '../tasks/outbox.dart';
+import 'members.dart';
 
 class BoardNotifier extends AsyncNotifier<Board> {
   BoardNotifier(this.boardId);
@@ -203,6 +204,12 @@ class BoardPage extends ConsumerWidget {
                   ),
                 ],
               ],
+            ),
+          if (board != null)
+            IconButton(
+              tooltip: 'Members',
+              icon: const GlyphIcon(Glyph.members),
+              onPressed: () => showMembers(context, boardId),
             ),
           IconButton(
             tooltip: 'Add column',

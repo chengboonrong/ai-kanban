@@ -33,7 +33,7 @@ const DEFAULT_COLUMNS = ['Backlog', 'Todo', 'In Progress', 'Done'];
 type Id = { id: string };
 
 /** Returns the user's role in the workspace; 404 when not a member (existence is not leaked). */
-async function workspaceRole(db: Db, userId: string, workspaceId: string): Promise<string> {
+export async function workspaceRole(db: Db, userId: string, workspaceId: string): Promise<string> {
   const { rows } = await db.query('SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [workspaceId, userId]);
   if (!rows[0]) throw httpError(404, 'workspace not found');
   return rows[0].role;

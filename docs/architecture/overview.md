@@ -192,6 +192,23 @@ per minute per user. Behind a proxy set `TRUST_PROXY` to the proxy's address (e.
 same machine), so the client's IP is used and can't be forged; a hop count or `true` is refused. Deferred: session token in the
 Keychain (it is in app preferences), a sign-in allowlist, the triage role.
 
+As built (team invites, issue #16): access is per workspace. Roles are `owner` (one, the creator: changes roles
+between `admin` and `member` and removes members; can't leave or be removed), `admin` (also creates, resends and
+revokes invites and sees pending invites' addresses) and `member` (the boards as before, the member list, leave).
+Members see each other's login and name, never addresses; non-members get 404 for anything under a workspace. An
+invite stores the lowercased address and the SHA-256 of a random token, expires after 7 days, and is emailed as
+`$APP_URL/#/invite/<token>` through Resend (`RESEND_API_KEY`, `MAIL_FROM`); without them `AUTH_MODE=github` refuses
+invites with 503 and `AUTH_MODE=dev` logs the link. Inviting an address with a pending invite, or resending, issues a
+new token, which voids the old link. Sign-in stores the user's verified GitHub addresses (`GET /user/emails`, the
+app's Email addresses permission), replaced each time; with `AUTH_MODE=github` an invite is accepted only by an
+account holding its address, else 403 with the address masked. Accepting locks the invite row, so a link adds one
+person, and a revoke racing an accept loses to it or wins outright. Removing a member deletes the membership row,
+which every board, task and run check joins, so access ends with the next request; runs on boards whose repository
+they connected wait until someone connects it again (the board's waiting reason is `connector_left`). The accept call
+carries the token in its body (`POST /invites/accept`), since request logs record URLs; an account with no stored
+addresses gets 403 with `code: 'sign_in_again'`. Rate limits, in memory per process: 20 invite emails per hour per
+workspace and per inviter, and 30 accepts per minute per user. Deferred: transferring ownership, per-board membership.
+
 ### Repository security
 
 Read-only access throughout: GitHub App permissions limited to issues write plus read access to contents (commit data on linked PRs), pull requests, checks and statuses; the backend never clones repositories (the worker exports the commit locally). Repository content is data, not instructions — the refiner never executes repository instructions, installs dependencies or runs scripts. Workers: a visible list of which repositories each may read, confirmed per repository.

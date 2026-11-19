@@ -1,6 +1,7 @@
 import { buildApp } from './app.ts';
 import { createPool } from './db.ts';
 import { githubConfigFromEnv, gitHubClient } from './github.ts';
+import { mailerFromEnv } from './mail.ts';
 import { migrate } from './migrate.ts';
 import { startRunSweeper } from './refinement.ts';
 import { buildWebhookApp, startGitHubSync } from './sync.ts';
@@ -10,7 +11,7 @@ await migrate(pool);
 const host = process.env.HOST ?? '127.0.0.1';
 const { config: github, missing } = githubConfigFromEnv();
 const gh = github && gitHubClient(github);
-const app = await buildApp({ pool, authMode: process.env.AUTH_MODE ?? 'none', logger: true, github: gh });
+const app = await buildApp({ pool, authMode: process.env.AUTH_MODE ?? 'none', logger: true, github: gh, mailer: mailerFromEnv() });
 await app.listen({ host, port: Number(process.env.PORT ?? 8080) });
 
 // Webhooks get their own port so a tunnel to it exposes nothing else (docs/setup/github-app.md).

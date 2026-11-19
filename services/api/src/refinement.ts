@@ -502,11 +502,15 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
 /**
  * Why the board's queued runs aren't being picked up, judged from the workers of whoever connected its repository.
  * no_connector: that account is gone (the column is SET NULL), so no worker can ever claim them.
+ * connector_left: that person left or was removed from the workspace; their workers no longer claim its runs.
+ * no_worker_online, repository_not_listed, busy: about the connector's workers.
  */
 export async function waitingFor(db: Db, boardId: string, repository: string) {
   const { rows: [w] } = await db.query(
     `SELECT u.login AS connector, CASE
          WHEN b.repository_connected_by IS NULL THEN 'no_connector'
+         WHEN NOT EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = b.workspace_id AND user_id = b.repository_connected_by)
+           THEN 'connector_left'
          WHEN NOT COALESCE(bool_or(w.online), false) THEN 'no_worker_online'
          WHEN NOT bool_or(w.online AND w.listed) THEN 'repository_not_listed'
          WHEN NOT bool_or(w.online AND w.listed AND NOT w.busy) THEN 'busy' END AS reason
@@ -516,7 +520,7 @@ export async function waitingFor(db: Db, boardId: string, repository: string) {
        SELECT ${ONLINE} AS online, $2 = ANY(repositories) AS listed,
          EXISTS (SELECT 1 FROM agent_runs r WHERE r.worker_id = x.id AND r.state = 'running') AS busy
        FROM workers x WHERE x.owner_id = b.repository_connected_by) w ON true
-     WHERE b.id = $1 GROUP BY u.login, b.repository_connected_by`,
+     WHERE b.id = $1 GROUP BY u.login, b.repository_connected_by, b.workspace_id`,
     [boardId, repository],
   );
   return w?.reason ? { reason: w.reason, connector: w.connector } : null;

@@ -60,7 +60,17 @@ Profile picture → **Settings** → **Developer settings** → **GitHub Apps** 
 
 **Subscribe to events:** Issues, Pull request, Pull request review, Check run, Check suite, Status.
 
-Account and organization permissions: none. Click **Create GitHub App**.
+**Account permissions:**
+
+| Permission | Access | Why |
+| --- | --- | --- |
+| Email addresses | Read-only | Sign-in stores your verified addresses; accepting a team invite checks that it was sent to one of them, so a forwarded link can't add someone else |
+
+Organization permissions: none. Click **Create GitHub App**.
+
+Adding Email addresses to an app that already exists: users who authorized it before may have to approve the new
+permission on GitHub, then sign in again (unverified until tried on a real app). Until then sign-in still works, but no
+addresses are stored, so their invites answer 403.
 
 ## 4. Private key
 
@@ -91,6 +101,17 @@ GITHUB_APP_PRIVATE_KEY_PATH=/Users/<you>/.config/ai-kanban/github-app.pem
 To sign in with GitHub instead of the dev login, start the API with `AUTH_MODE=github` (for example
 `AUTH_MODE=github node --env-file-if-exists=.env src/server.ts` in `services/api`). It uses the same client ID and no
 client secret.
+
+Team invites are emailed through [Resend](https://resend.com). With `AUTH_MODE=github` the API refuses to create
+invites (503) until both are set; with `AUTH_MODE=dev` and no mailer it logs the invite link instead:
+
+```sh
+RESEND_API_KEY=re_...          # a sending-only key
+MAIL_FROM='AI Kanban <invites@your-domain.example>'   # an address on a domain verified in Resend
+APP_URL=http://localhost:3000  # where the Flutter web app is served; invite links are $APP_URL/#/invite/<token>
+```
+
+The API key is a secret like the private key: keep it in `.env`, not in the repository.
 
 ## 6. When the tunnel URL changes
 

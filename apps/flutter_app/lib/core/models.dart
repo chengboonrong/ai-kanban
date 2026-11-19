@@ -26,14 +26,54 @@ class BoardRef {
 }
 
 class Workspace {
-  Workspace({required this.id, required this.name, required this.boards});
+  Workspace({
+    required this.id,
+    required this.name,
+    required this.boards,
+    this.role = 'member',
+  });
   factory Workspace.fromJson(Map<String, dynamic> j) => Workspace(
     id: j['id'],
     name: j['name'],
     boards: [for (final b in j['boards']) BoardRef.fromJson(b)],
+    role:
+        j['role'] ??
+        'member', // absent from copies saved before the app read it
   );
   final String id, name;
   final List<BoardRef> boards;
+
+  /// The viewer's role here: owner, admin or member.
+  final String role;
+}
+
+class Member {
+  Member.fromJson(Map<String, dynamic> j)
+    : userId = j['userId'],
+      login = j['login'],
+      displayName = j['displayName'],
+      role = j['role'];
+  final String userId, login, displayName;
+
+  /// owner, admin or member.
+  final String role;
+}
+
+/// A pending invite, as owners and admins see it; past [expiresAt] it can only be resent or revoked.
+class Invite {
+  Invite.fromJson(Map<String, dynamic> j)
+    : id = j['id'],
+      email = j['email'],
+      invitedBy = j['invitedBy'],
+      createdAt = DateTime.parse(j['createdAt']).toLocal(),
+      expiresAt = DateTime.parse(j['expiresAt']).toLocal();
+  final String id, email;
+
+  /// Login of whoever sent it; null once that account is gone.
+  final String? invitedBy;
+  final DateTime createdAt, expiresAt;
+
+  bool get expired => expiresAt.isBefore(DateTime.now());
 }
 
 class Task {
@@ -498,20 +538,25 @@ class Waiting {
       ? null
       : Waiting(reason: j['reason'], connector: j['connector']);
 
-  /// no_connector, no_worker_online, repository_not_listed or busy.
+  /// no_connector, connector_left, no_worker_online, repository_not_listed or busy.
   final String reason;
 
   /// Login of whoever connected the board's repository; their workers are the ones that can take the run.
   final String? connector;
 
   /// The viewer's own workers are the ones it waits for.
-  bool mine(String? viewer) => connector != null && connector == viewer;
+  bool mine(String? viewer) =>
+      connector != null && connector == viewer && reason != 'connector_left';
 
   /// The reason in words, or null for one this app doesn't know.
   String? describe({required String? viewer, required String? repository}) {
     // Nobody connected it (or that account is gone), so no worker can ever take the run.
     if (reason == 'no_connector' || connector == null) {
       return 'Connect the repository again on this board to have it refined';
+    }
+    // They left or were removed, so their workers no longer take this board's runs.
+    if (reason == 'connector_left') {
+      return '$connector left this workspace; connect the repository again on this board to have it refined';
     }
     final mine = this.mine(viewer);
     final whose = mine ? 'Your workers' : "$connector's workers";

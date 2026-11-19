@@ -38,7 +38,8 @@ The agent reads the repository on the user's own machine, read-only, and never w
 - Routes: sign-in, workspaces, board, task, workers.
 - Terminology: workspace, board, column, task (card), brief, refinement / run, spec (versioned), evidence, worker, repository, issue, PR.
 - Strings, routes, handlers and test finders in `apps/flutter_app` are relied on by unit and integration tests.
-- Undecided: team roles and permissions; mobile-specific capture flow; notifications.
+- Team roles: per workspace, `owner` (the creator; sets roles, removes members, can't leave), `admin` (also invites by email and sees pending invites) and `member` (works on the boards). Per-board membership is out of scope.
+- Undecided: mobile-specific capture flow; notifications.
 
 ## Brand Commitments
 
