@@ -97,7 +97,8 @@ All three are one Flutter app with adaptive layouts.
 ## Status
 
 Early build. Milestones: foundation → Kanban core → OpenCode + DeepSeek refinement → GitHub sync → your own workers →
-hardening. The first release targets macOS desktop and web.
+hardening, all done. The first release targets macOS desktop and web: download the signed, notarized macOS app from
+[Releases](https://github.com/chengboonrong/ai-kanban/releases/latest).
 
 Architecture: [docs/architecture/overview.md](docs/architecture/overview.md)
 
