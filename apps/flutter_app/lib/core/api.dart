@@ -174,6 +174,29 @@ class Api {
   Future<void> retryGitHub(String taskId) =>
       _dio.post('/tasks/$taskId/github/retry');
 
+  /// Re-queues the failed spec comment on an imported issue.
+  Future<void> retryComment(String taskId) =>
+      _dio.post('/tasks/$taskId/github/comment/retry');
+
+  /// A page of the board repository's open issues, most recently updated first; [more] when there may be another.
+  Future<({List<RepoIssue> issues, bool more})> repoIssues(
+    String boardId, {
+    int page = 1,
+  }) async {
+    final data = (await _dio.get(
+      '/boards/$boardId/github/issues',
+      queryParameters: {'page': page},
+    )).data;
+    return (
+      issues: [for (final i in data['issues']) RepoIssue.fromJson(i)],
+      more: data['more'] == true,
+    );
+  }
+
+  /// Makes a card from the issue; 409 when it is already on a board.
+  Future<void> importIssue(String boardId, int number) =>
+      _dio.post('/boards/$boardId/github/import', data: {'number': number});
+
   /// Long-poll: the server answers when there are events after [after], when the run ends, or after ~20s.
   Future<({String state, List<RunEvent> events})> runEvents(
     String runId,

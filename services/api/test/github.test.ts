@@ -19,13 +19,32 @@ const SECRET = 'webhook-secret';
 
 // ---- Fake GitHub: just the endpoints the sync uses, per repository, with injectable failures ----
 
-type FakeIssue = { number: number; node_id: string; html_url: string; state: 'open'; title: string; body: string; created_at: string;
-  performed_via_github_app: { id: number } | null; user: { login: string } };
+type FakeIssue = { number: number; node_id: string; html_url: string; repository_url: string; state: 'open'; title: string; body: string;
+  created_at: string; updated_at: string; performed_via_github_app: { id: number } | null; user: { login: string }; pull_request?: object };
+type FakeComment = { id: number; issue: number; html_url: string; body: string; created_at: string; performed_via_github_app: null; user: { login: string } };
 /** An injected response for the next matching call: an error status, a dropped connection, or a hold until `wait` settles. */
 type Failure = { match: string; status?: number; headers?: Record<string, string>; drop?: boolean; wait?: Promise<void> };
-type FakeRepo = { id: number; issues: FakeIssue[]; prs: Map<number, object>; failures: Failure[]; onGraphql?: (n: number) => Promise<void> };
+type FakeRepo = { id: number; issues: FakeIssue[]; comments: FakeComment[]; prs: Map<number, object>; failures: Failure[];
+  onGraphql?: (n: number) => Promise<void> };
 const repos = new Map<string, FakeRepo>();
 const calls: string[] = [];
+let commentIds = 0;
+
+const fakeIssue = (repository: string, number: number, fields: Partial<FakeIssue>): FakeIssue => ({
+  number, node_id: `I_${number}`, html_url: `https://github.com/${repository}/issues/${number}`,
+  repository_url: `${config.apiUrl}/repos/${repository}`, state: 'open', title: '', body: '', created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(), performed_via_github_app: null, user: { login: 'octocat' }, ...fields,
+});
+const fakeComment = (repository: string, issue: number, body: string, login: string): FakeComment => {
+  const id = ++commentIds;
+  return { id, issue, html_url: `https://github.com/${repository}/issues/${issue}#issuecomment-${id}`, body, created_at: new Date().toISOString(),
+    performed_via_github_app: null, user: { login } };
+};
+const pageOf = <T>(items: T[], url: URL) => {
+  const page = Number(url.searchParams.get('page') ?? 1);
+  const per = Number(url.searchParams.get('per_page') ?? 30);
+  return items.slice((page - 1) * per, page * per);
+};
 
 const fake = createServer(async (req, res) => {
   const chunks: Buffer[] = [];
@@ -41,7 +60,7 @@ const fake = createServer(async (req, res) => {
   const [, name, rest] =
     url.pathname === '/graphql' ? ['', `${body.variables.owner}/${body.variables.name}`, '/graphql'] : (/^\/repos\/([^/]+\/[^/]+)(.*)$/.exec(url.pathname) ?? []);
   const repo = name ? repos.get(name) : undefined;
-  if (!repo) return send(404, { message: 'Not Found' });
+  if (!repo || !name) return send(404, { message: 'Not Found' });
   const call = `${req.method} ${rest || '/'}`;
   const i = repo.failures.findIndex((f) => f.match === call);
   const failure = i >= 0 ? repo.failures.splice(i, 1)[0] : undefined;
@@ -51,17 +70,29 @@ const fake = createServer(async (req, res) => {
   if (call === 'GET /installation') return send(200, { id: 1, app_id: APP_ID, app_slug: 'ai-kanban-test' });
   if (call === 'GET /') return send(200, { id: repo.id, full_name: name });
   if (call === 'POST /issues') {
-    const number = repo.issues.length + 1;
-    repo.issues.push({ number, node_id: `I_${number}`, html_url: `https://github.com/${name}/issues/${number}`, state: 'open', title: body.title,
-      // Recognised by its bot author alone, in case GitHub leaves performed_via_github_app empty.
-      body: body.body, created_at: new Date().toISOString(), performed_via_github_app: null, user: { login: BOT } });
+    // Recognised by its bot author alone, in case GitHub leaves performed_via_github_app empty.
+    repo.issues.push(fakeIssue(name, repo.issues.length + 1, { title: body.title, body: body.body, user: { login: BOT } }));
     if (failure?.drop) return res.socket!.destroy(); // created, but the response never arrives
     return send(201, repo.issues.at(-1));
   }
   if (call === 'GET /issues') {
-    const page = Number(url.searchParams.get('page') ?? 1);
     const sorted = [...repo.issues].sort((a, b) => b.created_at.localeCompare(a.created_at));
-    return send(200, sorted.slice((page - 1) * 100, page * 100));
+    return send(200, pageOf(sorted, url));
+  }
+  const n = /^\w+ \/issues\/(\d+)/.exec(call)?.[1];
+  const issue = repo.issues.find((i) => `${i.number}` === n);
+  if (/^GET \/issues\/\d+$/.test(call)) return issue ? send(200, issue) : send(404, { message: 'Not Found' });
+  if (issue && /^\w+ \/issues\/\d+\/comments$/.test(call)) {
+    if (req.method === 'GET') return send(200, pageOf(repo.comments.filter((c) => c.issue === issue.number), url));
+    repo.comments.push(fakeComment(name, issue.number, body.body, BOT));
+    if (failure?.drop) return res.socket!.destroy();
+    return send(201, repo.comments.at(-1));
+  }
+  if (call.startsWith('PATCH /issues/comments/')) {
+    const comment = repo.comments.find((c) => `${c.id}` === call.split('/').at(-1));
+    if (!comment) return send(404, { message: 'Not Found' });
+    comment.body = body.body;
+    return send(200, comment);
   }
   if (call === 'POST /graphql') {
     await repo.onGraphql?.(body.variables.number);
@@ -84,9 +115,9 @@ before(async () => {
     webhookSecret: SECRET,
     apiUrl: `http://127.0.0.1:${(fake.address() as AddressInfo).port}`,
   };
-  app = await buildApp({ pool, authMode: 'dev' });
-  webhooks = await buildWebhookApp({ pool, github: config });
   gh = gitHubClient(config);
+  app = await buildApp({ pool, authMode: 'dev', github: gh });
+  webhooks = await buildWebhookApp({ pool, github: config });
 });
 after(async () => {
   await Promise.all([app.close(), webhooks.close(), new Promise((resolve) => fake.close(resolve))]);
@@ -113,7 +144,7 @@ async function fixture({ installed = true } = {}) {
   const board = (await api('POST', `/workspaces/${ws.id}/boards`, { name: 'Roadmap' })).json();
   await api('PATCH', `/boards/${board.id}`, { repository });
   const worker = as((await pairWorker(api, 'Mac')).token);
-  const repo: FakeRepo = { id: randomInt(1, 2 ** 47), issues: [], prs: new Map(), failures: [] };
+  const repo: FakeRepo = { id: randomInt(1, 2 ** 47), issues: [], comments: [], prs: new Map(), failures: [] };
   if (installed) repos.set(repository, repo);
   return { api, board, repository, worker, repo };
 }
@@ -131,14 +162,33 @@ const spec = (overrides = {}) => ({
   ...overrides,
 });
 
-/** A new card refined to a ready (unapproved) spec. */
-async function refined(f: Fixture, s = spec()) {
-  const task = (await f.api('POST', `/boards/${f.board.id}/tasks`, { title: 'Add GitHub login' })).json();
+/** The fixture's worker takes the oldest queued run and hands in `s`; returns the spec's id. */
+async function handIn(f: Fixture, s = spec()) {
   const run = (await f.worker('POST', '/worker/claim', { repositories: [f.repository] })).json();
   const complete = await f.worker('POST', `/worker/runs/${run.id}/complete`, { model: 'm', commitSha: 'a'.repeat(40), spec: s });
   assert.equal(complete.statusCode, 200, complete.body);
-  return { task, specId: complete.json().id as string };
+  return complete.json().id as string;
 }
+
+/** A new card refined to a ready (unapproved) spec. */
+async function refined(f: Fixture, s = spec()) {
+  const task = (await f.api('POST', `/boards/${f.board.id}/tasks`, { title: 'Add GitHub login' })).json();
+  return { task, specId: await handIn(f, s) };
+}
+
+/** An issue someone opened on the fixture's repository. */
+const opened = (f: Fixture, fields: Partial<FakeIssue> = {}) => {
+  const issue = fakeIssue(f.repository, f.repo.issues.length + 1, { title: 'Login fails on Safari', body: 'Steps to reproduce', ...fields });
+  f.repo.issues.push(issue);
+  return issue;
+};
+const imported = async (f: Fixture, number = 1) => {
+  const res = await f.api('POST', `/boards/${f.board.id}/github/import`, { number });
+  assert.equal(res.statusCode, 201, res.body);
+  return res.json() as { id: string; title: string; description: string; columnId: string };
+};
+const commentRow = async (taskId: string) => (await pool.query('SELECT * FROM github_comments WHERE task_id = $1', [taskId])).rows[0];
+const commentCalls = (f: Fixture, call: string) => calls.filter((c) => c === call.replace(' ', ` /repos/${f.repository}`)).length;
 
 async function approved(f: Fixture, s = spec()) {
   const { task, specId } = await refined(f, s);
@@ -203,7 +253,11 @@ test('approving files exactly one issue, even when approved twice and synced twi
   assert.ok(f.repo.issues[0].body.startsWith(`<!-- ai-kanban:task:${task.id} -->`));
 
   const url = `https://github.com/${f.repository}/issues/1`;
-  assert.deepEqual((await f.api('GET', `/tasks/${task.id}/github`)).json(), { issue: { state: 'created', number: 1, url, issueState: 'open' }, prs: [] });
+  assert.deepEqual((await f.api('GET', `/tasks/${task.id}/github`)).json(), {
+    issue: { state: 'created', number: 1, url, issueState: 'open', origin: 'filed' },
+    comment: null,
+    prs: [],
+  });
   assert.equal((await row(task.id)).repository_id, String(f.repo.id));
   const activity = (await f.api('GET', `/tasks/${task.id}`)).json().activity;
   assert.deepEqual(activity.at(-1).data, { number: 1, url });
@@ -424,4 +478,177 @@ test('pull requests link by closing reference or an N- branch, not a mention; re
   const before8 = (await pr(f, 8)).dirty_seq;
   await deliver('status', { repository: { id: f.repo.id, full_name: f.repository }, sha: 'sha8', state: 'success' });
   assert.equal((await pr(f, 8)).dirty_seq, before8 + 1);
+});
+
+test('importing issues: the list marks ones already on a board; an import makes the card, links the issue and refines it, once', async () => {
+  const f = await fixture();
+  opened(f, { body: 'Steps: sign in on Safari. cc @octocat' }); // #1
+  opened(f, { title: 'Add dark mode', pull_request: {} }); // #2, a pull request: the issues API lists those too
+  opened(f, { title: 'Crash on start' }); // #3
+  type Listed = { number: number; title: string; author: string; onBoard: boolean; taskId: string | null };
+  const list = async (api: Api = f.api, boardId = f.board.id) => {
+    const res = await api('GET', `/boards/${boardId}/github/issues`);
+    assert.equal(res.statusCode, 200, res.body);
+    return (res.json().issues as Listed[]).sort((a, b) => a.number - b.number);
+  };
+  assert.deepEqual(
+    (await list()).map((i) => [i.number, i.title, i.author, i.onBoard, i.taskId]),
+    [[1, 'Login fails on Safari', 'octocat', false, null], [3, 'Crash on start', 'octocat', false, null]],
+  );
+
+  const task = await imported(f);
+  assert.equal(task.title, 'Login fails on Safari');
+  assert.equal(task.description, 'Steps: sign in on Safari. cc @octocat');
+  assert.equal(task.columnId, f.board.columns[0].id, 'first column');
+  const url = `https://github.com/${f.repository}/issues/1`;
+  assert.deepEqual((await f.api('GET', `/tasks/${task.id}/github`)).json(), {
+    issue: { state: 'created', number: 1, url, issueState: 'open', origin: 'imported' },
+    comment: null,
+    prs: [],
+  });
+  assert.equal((await row(task.id)).repository_id, String(f.repo.id));
+  assert.deepEqual(await card(f.api, f.board.id, task.id), { issue: { number: 1, url, state: 'open' }, prs: 0, review: null, ci: null });
+  const { rows: runs } = await pool.query('SELECT state FROM agent_runs WHERE task_id = $1', [task.id]);
+  assert.deepEqual(runs, [{ state: 'queued' }], 'refined like any new card');
+  const activity = (await f.api('GET', `/tasks/${task.id}`)).json().activity;
+  assert.deepEqual(activity.find((a: { kind: string }) => a.kind === 'github_issue_imported').data, { number: 1, url });
+  assert.deepEqual((await list()).map((i) => [i.number, i.onBoard, i.taskId]), [[1, true, task.id], [3, false, null]]);
+
+  const again = await f.api('POST', `/boards/${f.board.id}/github/import`, { number: 1 });
+  assert.equal(again.statusCode, 409);
+  assert.deepEqual([again.json().message, again.json().taskId], ['#1 is already on a board', task.id]);
+  assert.equal((await f.api('GET', `/boards/${f.board.id}`)).json().columns[0].tasks.length, 1, 'the second card was rolled back');
+
+  // Someone else's board on the same repository: the issue shows as taken, but not which card has it.
+  const other = await user();
+  const ws = (await other('POST', '/workspaces', { name: 'Other' })).json();
+  const board = (await other('POST', `/workspaces/${ws.id}/boards`, { name: 'Theirs' })).json();
+  await other('PATCH', `/boards/${board.id}`, { repository: f.repository });
+  assert.deepEqual((await list(other, board.id)).map((i) => [i.number, i.onBoard, i.taskId]), [[1, true, null], [3, false, null]]);
+  const theirs = await other('POST', `/boards/${board.id}/github/import`, { number: 1 });
+  assert.deepEqual([theirs.statusCode, theirs.json().taskId], [409, null]);
+
+  // Both boards import #3 at once: one card.
+  const both = await Promise.all([
+    f.api('POST', `/boards/${f.board.id}/github/import`, { number: 3 }),
+    other('POST', `/boards/${board.id}/github/import`, { number: 3 }),
+  ]);
+  assert.deepEqual(both.map((r) => r.statusCode).sort(), [201, 409]);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM github_issues WHERE repository_id = $1 AND number = 3', [f.repo.id])).rows[0].n, 1);
+
+  const pr = await f.api('POST', `/boards/${f.board.id}/github/import`, { number: 2 });
+  assert.deepEqual([pr.statusCode, pr.json().message], [400, '#2 is a pull request, not an issue']);
+  assert.equal((await f.api('POST', `/boards/${f.board.id}/github/import`, { number: 99 })).statusCode, 404);
+  assert.equal((await (await user())('POST', `/boards/${f.board.id}/github/import`, { number: 3 })).statusCode, 404, 'board members only');
+  assert.equal(posts(f.repository), 0, 'nothing filed');
+
+  const ws2 = (await f.api('POST', '/workspaces', { name: 'W' })).json();
+  const unconnected = (await f.api('POST', `/workspaces/${ws2.id}/boards`, { name: 'B' })).json();
+  assert.equal((await f.api('GET', `/boards/${unconnected.id}/github/issues`)).statusCode, 409);
+
+  const bare = await buildApp({ pool, authMode: 'dev' });
+  const { token } = (await bare.inject({ method: 'POST', url: '/auth/dev-login', payload: { login: `u-${randomUUID().slice(0, 8)}` } })).json();
+  const off = await bare.inject({ method: 'GET', url: `/boards/${f.board.id}/github/issues`, headers: { authorization: `Bearer ${token}` } });
+  assert.deepEqual([off.statusCode, off.json().message], [503, 'GitHub sync is not configured']);
+  await bare.close();
+});
+
+test('approving an imported task comments the spec once, even when the first answer is lost; a newer version edits that comment', async () => {
+  const f = await fixture();
+  opened(f);
+  const task = await imported(f);
+  assert.equal((await f.api('POST', `/specs/${await handIn(f)}/approve`)).statusCode, 200);
+  assert.deepEqual((await f.api('GET', `/tasks/${task.id}/github`)).json().comment, { state: 'pending', version: 1, url: null, error: null });
+
+  // Someone pastes the marker in a comment of their own first; the app didn't post it, so it must not be adopted.
+  const marker = `<!-- ai-kanban:spec:${task.id} -->`;
+  f.repo.comments.push(fakeComment(f.repository, 1, `${marker} me too`, 'mallory'));
+  f.repo.failures.push({ match: 'POST /issues/1/comments', drop: true });
+  await syncOnce(pool, gh);
+  const lost = await commentRow(task.id);
+  assert.equal(lost.state, 'pending');
+  assert.match(lost.last_error, /unreachable/);
+  const own = f.repo.comments[1];
+  assert.equal(own.user.login, BOT, 'GitHub did post it');
+
+  await pool.query('UPDATE github_comments SET next_attempt_at = now() WHERE task_id = $1', [task.id]);
+  await syncOnce(pool, gh);
+  const posted = await commentRow(task.id);
+  assert.deepEqual([posted.state, posted.attempts, posted.comment_id], ['posted', 2, String(own.id)]);
+  assert.equal(commentCalls(f, 'POST /issues/1/comments'), 1, 'posted once');
+  assert.equal(posts(f.repository), 0, 'no issue filed');
+  assert.equal((await row(task.id)).origin, 'imported');
+  assert.ok(own.body.startsWith(`${marker}\n\n## AI Kanban spec (version 1)\n\nLet people connect GitHub`));
+  assert.deepEqual((await f.api('GET', `/tasks/${task.id}/github`)).json().comment, { state: 'posted', version: 1, url: own.html_url, error: null });
+  const activity = (await f.api('GET', `/tasks/${task.id}`)).json().activity;
+  assert.deepEqual([activity.at(-1).kind, activity.at(-1).data], ['github_comment_posted', { version: 1, url: own.html_url }]);
+
+  // Refined again and approved: the same comment now shows version 2.
+  assert.equal((await f.api('POST', `/tasks/${task.id}/runs`)).statusCode, 201);
+  assert.equal((await f.api('POST', `/specs/${await handIn(f, spec({ summary: 'Second take' }))}/approve`)).statusCode, 200);
+  await syncOnce(pool, gh);
+  assert.equal(commentCalls(f, `PATCH /issues/comments/${own.id}`), 1);
+  assert.equal(commentCalls(f, 'POST /issues/1/comments'), 1, 'still one comment');
+  assert.ok(own.body.includes('## AI Kanban spec (version 2)\n\nSecond take'));
+  assert.deepEqual((await f.api('GET', `/tasks/${task.id}/github`)).json().comment, { state: 'posted', version: 2, url: own.html_url, error: null });
+  assert.equal((await f.api('POST', `/tasks/${task.id}/github/comment/retry`)).statusCode, 409, 'nothing to retry');
+});
+
+test('a version approved while the comment is being posted waits for that attempt, then edits what it posted', async () => {
+  const f = await fixture();
+  opened(f);
+  const task = await imported(f);
+  let release!: () => void;
+  f.repo.failures.push({ match: 'POST /issues/1/comments', wait: new Promise<void>((resolve) => (release = resolve)) });
+  assert.equal((await f.api('POST', `/specs/${await handIn(f)}/approve`)).statusCode, 200);
+  const stale = syncOnce(pool, gh);
+  while (!commentCalls(f, 'POST /issues/1/comments')) await sleep(10);
+  assert.equal((await f.api('POST', `/tasks/${task.id}/runs`)).statusCode, 201);
+  assert.equal((await f.api('POST', `/specs/${await handIn(f, spec({ summary: 'Second take' }))}/approve`)).statusCode, 200);
+  release();
+  await stale;
+  const queued = await commentRow(task.id);
+  assert.deepEqual([queued.state, queued.version, queued.comment_id], ['pending', 2, null], 'the stale attempt recorded nothing');
+  assert.ok(queued.locked_until > new Date(), 'and nobody starts until its lease lapses');
+
+  await pool.query(`UPDATE github_comments SET locked_until = now() - interval '1 second' WHERE task_id = $1`, [task.id]);
+  await syncOnce(pool, gh);
+  assert.equal((await commentRow(task.id)).state, 'posted');
+  assert.equal(f.repo.comments.length, 1, 'edited, not posted again');
+  assert.ok(f.repo.comments[0].body.includes('## AI Kanban spec (version 2)\n\nSecond take'));
+});
+
+test('a comment GitHub refuses fails with the reason and is posted again on retry', async () => {
+  const f = await fixture();
+  opened(f);
+  const task = await imported(f);
+  f.repo.failures.push({ match: 'POST /issues/1/comments', status: 403 });
+  assert.equal((await f.api('POST', `/specs/${await handIn(f)}/approve`)).statusCode, 200);
+  await syncOnce(pool, gh);
+  const failed = (await f.api('GET', `/tasks/${task.id}/github`)).json().comment;
+  assert.equal(failed.state, 'failed');
+  assert.match(failed.error, /isn't allowed to comment on issues in/);
+
+  assert.equal((await (await user())('POST', `/tasks/${task.id}/github/comment/retry`)).statusCode, 404, 'board members only');
+  const retried = await f.api('POST', `/tasks/${task.id}/github/comment/retry`);
+  assert.equal(retried.statusCode, 200);
+  assert.equal(retried.json().comment.state, 'pending');
+  await syncOnce(pool, gh);
+  assert.equal((await commentRow(task.id)).state, 'posted');
+  assert.equal(f.repo.comments.length, 1);
+});
+
+test('a pull request that closes an imported issue links to its card', async () => {
+  const f = await fixture();
+  opened(f);
+  const task = await imported(f);
+  f.repo.prs.set(5, {
+    title: 'Fix Safari login', url: `https://github.com/${f.repository}/pull/5`, state: 'OPEN', isDraft: false, headRefName: 'safari', headRefOid: 'sha5',
+    updatedAt: '2026-11-01T00:00:00Z', reviewDecision: null, author: { login: 'octocat' }, commits: { nodes: [] },
+    closingIssuesReferences: { nodes: [{ number: 1, repository: { databaseId: f.repo.id } }] },
+  });
+  assert.equal((await deliver('pull_request', prEvent(f, 5))).statusCode, 200);
+  await syncOnce(pool, gh);
+  assert.deepEqual((await f.api('GET', `/tasks/${task.id}/github`)).json().prs.map((p: { number: number }) => p.number), [5]);
+  assert.equal((await card(f.api, f.board.id, task.id)).prs, 1);
 });

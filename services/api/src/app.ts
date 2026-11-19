@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { randomBytes } from 'node:crypto';
 import type pg from 'pg';
 import { httpError, sha256 } from './db.ts';
+import type { GitHubClient } from './github.ts';
 import { registerRefinementRoutes } from './refinement.ts';
 import { registerRoutes } from './routes.ts';
 import { registerGitHubRoutes } from './sync.ts';
@@ -25,11 +26,13 @@ export interface AppOptions {
   /** 'dev' enables POST /auth/dev-login (passwordless, local only). Anything else: no login route yet. */
   authMode: string;
   logger?: boolean;
+  /** The GitHub App's client, shared with the sync loop (one rate-limit pause, one token cache); routes that call GitHub answer 503 without it. */
+  github?: GitHubClient;
 }
 
 const bearer = (header = '') => /^Bearer (\S+)$/.exec(header)?.[1];
 
-export async function buildApp({ pool, authMode, logger = false }: AppOptions) {
+export async function buildApp({ pool, authMode, logger = false, github }: AppOptions) {
   if (authMode === 'dev' && process.env.NODE_ENV === 'production') {
     throw new Error('AUTH_MODE=dev is refused when NODE_ENV=production');
   }
@@ -114,6 +117,6 @@ export async function buildApp({ pool, authMode, logger = false }: AppOptions) {
 
   registerRoutes(app, pool);
   registerRefinementRoutes(app, pool);
-  registerGitHubRoutes(app, pool);
+  registerGitHubRoutes(app, pool, github);
   return app;
 }

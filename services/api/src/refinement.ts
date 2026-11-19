@@ -5,7 +5,7 @@ import type pg from 'pg';
 import specSchema from '../../../packages/contracts/refined-spec.schema.json' with { type: 'json' };
 import { type Db, httpError, sha256, tx } from './db.ts';
 import { boardFor, enqueueRun, type Feedback, logActivity, REPOSITORY, RUN } from './routes.ts';
-import { queueIssue } from './sync.ts';
+import { queueComment, queueIssue } from './sync.ts';
 
 const uuid = { type: 'string', format: 'uuid' } as const;
 const idParams = { type: 'object', required: ['id'], properties: { id: uuid } } as const;
@@ -265,7 +265,10 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       }
       const { rows } = await c.query(`UPDATE specs SET approved_by = $2, approved_at = now() WHERE id = $1 RETURNING ${SPEC}`, [id, req.userId]);
       await logActivity(c, spec.taskId, req.userId, 'spec_approved', { version: spec.version });
-      await queueIssue(c, spec.taskId, run.repository);
+      // An imported issue is GitHub's (someone else wrote it): the spec goes on it as a comment, never as a second issue.
+      const { rows: [issue] } = await c.query('SELECT origin FROM github_issues WHERE task_id = $1', [spec.taskId]);
+      if (issue?.origin === 'imported') await queueComment(c, spec.taskId, spec.version);
+      else await queueIssue(c, spec.taskId, run.repository);
       return rows[0];
     });
   });

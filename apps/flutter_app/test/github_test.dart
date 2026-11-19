@@ -11,8 +11,23 @@ class _FakeApi extends Api {
   _FakeApi(this.onBoard, this.detail) : super(Dio());
   final Task onBoard;
   Map<String, dynamic> detail;
-  int reads = 0, retries = 0;
+  int reads = 0, retries = 0, commentRetries = 0;
   Map<String, dynamic>? afterRetry;
+
+  /// Open issues by page, for the import dialog.
+  Map<int, ({List<RepoIssue> issues, bool more})> pages = {};
+
+  @override
+  Future<({List<RepoIssue> issues, bool more})> repoIssues(
+    String boardId, {
+    int page = 1,
+  }) async => pages[page]!;
+
+  @override
+  Future<void> retryComment(String taskId) async {
+    commentRetries++;
+    detail = afterRetry!;
+  }
 
   @override
   Future<Board> board(String id) async => Board(
@@ -187,6 +202,134 @@ void main() {
       expect(find.textContaining('No linked pull requests'), findsNothing);
     });
   });
+
+  group('imported issue', () {
+    final imported = {..._created, 'origin': 'imported'};
+
+    testWidgets('says where it came from and links the posted spec comment', (
+      tester,
+    ) async {
+      final api = _FakeApi(
+        _task(
+          refinement: 'running',
+          github: TaskGitHub(issueState: 'open', issueNumber: 12),
+        ),
+        {
+          'issue': imported,
+          'comment': {
+            'state': 'posted',
+            'version': 2,
+            'url': 'https://github.com/o/r/issues/12#issuecomment-7',
+            'error': null,
+          },
+          'prs': [],
+        },
+      );
+      await _pumpPanel(tester, api);
+      expect(find.text('Imported from #12'), findsOneWidget);
+      expect(
+        find.widgetWithText(TextButton, 'Spec v2 posted on the issue'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('shows a failed spec comment\'s error and retries it', (
+      tester,
+    ) async {
+      final api =
+          _FakeApi(_task(github: TaskGitHub(issueState: 'open')), {
+              'issue': imported,
+              'comment': {
+                'state': 'failed',
+                'version': 1,
+                'url': null,
+                'error': 'the GitHub App isn\'t allowed to comment',
+              },
+              'prs': [],
+            })
+            ..afterRetry = {
+              'issue': imported,
+              'comment': {'state': 'pending', 'version': 1},
+              'prs': [],
+            };
+      await _pumpPanel(tester, api);
+      expect(find.text('Couldn\'t post spec v1 on the issue'), findsOneWidget);
+      expect(
+        find.text('the GitHub App isn\'t allowed to comment'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Retry'));
+      await tester.pump();
+      await tester.pump();
+      expect([api.commentRetries, api.retries], [1, 0]);
+      expect(find.text('Posting spec v1 on the issue…'), findsOneWidget);
+    });
+  });
+
+  testWidgets(
+    'the import dialog lists open issues, filters them, loads more and returns the one tapped',
+    (tester) async {
+      RepoIssue issue(int n, String title, {bool onBoard = false}) =>
+          RepoIssue.fromJson({
+            'number': n,
+            'title': title,
+            'author': 'ann',
+            'onBoard': onBoard,
+            'taskId': null,
+          });
+      final api = _FakeApi(_task(), {})
+        ..pages = {
+          1: (
+            issues: [
+              issue(3, 'Crash on start'),
+              issue(1, 'Login fails', onBoard: true),
+            ],
+            more: true,
+          ),
+          2: (issues: [issue(7, 'Dark mode')], more: false),
+        };
+      int? picked;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [apiProvider.overrideWithValue(api)],
+          child: MaterialApp(
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async =>
+                    picked = await pickIssueToImport(context, 'b'),
+                child: const Text('Import'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Import'));
+      await tester.pumpAndSettle();
+      expect(find.text('Crash on start'), findsOneWidget);
+      expect(find.text('#3 by ann'), findsOneWidget);
+      expect(find.text('Already a card'), findsOneWidget);
+
+      await tester.tap(
+        find.text('Login fails'),
+      ); // already a card: nothing happens
+      await tester.pumpAndSettle();
+      expect(find.text('Import a GitHub issue'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'More'));
+      await tester.pumpAndSettle();
+      expect(find.text('Dark mode'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'More'), findsNothing);
+
+      await tester.enterText(find.byType(TextField), 'dark');
+      await tester.pump();
+      expect(find.text('Crash on start'), findsNothing);
+      await tester.tap(find.text('Dark mode'));
+      await tester.pumpAndSettle();
+      expect(picked, 7);
+      expect(find.text('Import a GitHub issue'), findsNothing);
+    },
+  );
 
   group('card badge', () {
     testWidgets(

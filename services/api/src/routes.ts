@@ -152,6 +152,29 @@ export async function enqueueRun(
 
 const columnName = async (db: Db, id: string) => (await db.query('SELECT name FROM columns WHERE id = $1', [id])).rows[0]?.name;
 
+/** Adds a card at the end of its column (the board's first unless given) and refines it; the caller holds the board lock. */
+export async function addTask(
+  c: pg.PoolClient,
+  boardId: string,
+  userId: string,
+  { title, description, columnId, key }: { title: string; description: string; columnId?: string; key?: string },
+) {
+  const { rows: [col] } = columnId
+    ? await c.query('SELECT id FROM columns WHERE id = $1 AND board_id = $2', [columnId, boardId])
+    : await c.query('SELECT id FROM columns WHERE board_id = $1 ORDER BY position LIMIT 1', [boardId]);
+  if (!col) throw httpError(400, columnId ? 'columnId is not on this board' : 'board has no columns');
+  const { rows: [task] } = await c.query(
+    `INSERT INTO tasks (board_id, column_id, title, description, position, created_by, idempotency_key)
+     VALUES ($1, $2, $3, $4, (SELECT count(*) FROM tasks WHERE column_id = $2), $5, $6) RETURNING ${TASK}`,
+    [boardId, col.id, title, description, userId, key ?? null],
+  );
+  await logActivity(c, task.id, userId, 'created', { title, column: await columnName(c, col.id) });
+  // refinement.auto_start: a board with a repository refines every new card.
+  const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1', [boardId]);
+  if (board.repository) await enqueueRun(c, task.id, userId, board.repository);
+  return task;
+}
+
 export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
   // ---- Workspaces ----
   app.get('/workspaces', async (req) => {
@@ -329,20 +352,7 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
           const { rows } = await c.query(`SELECT ${TASK} FROM tasks WHERE board_id = $1 AND idempotency_key = $2`, [boardId, key]);
           if (rows[0]) return { task: rows[0], created: false };
         }
-        const { rows: [col] } = columnId
-          ? await c.query('SELECT id FROM columns WHERE id = $1 AND board_id = $2', [columnId, boardId])
-          : await c.query('SELECT id FROM columns WHERE board_id = $1 ORDER BY position LIMIT 1', [boardId]);
-        if (!col) throw httpError(400, columnId ? 'columnId is not on this board' : 'board has no columns');
-        const { rows: [task] } = await c.query(
-          `INSERT INTO tasks (board_id, column_id, title, description, position, created_by, idempotency_key)
-           VALUES ($1, $2, $3, $4, (SELECT count(*) FROM tasks WHERE column_id = $2), $5, $6) RETURNING ${TASK}`,
-          [boardId, col.id, title, description, req.userId, key ?? null],
-        );
-        await logActivity(c, task.id, req.userId, 'created', { title, column: await columnName(c, col.id) });
-        // refinement.auto_start: a board with a repository refines every new card.
-        const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1', [boardId]);
-        if (board.repository) await enqueueRun(c, task.id, req.userId, board.repository);
-        return { task, created: true };
+        return { task: await addTask(c, boardId, req.userId, { title, description, columnId, key }), created: true };
       });
       return reply.code(result.created ? 201 : 200).send(result.task);
     },

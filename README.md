@@ -164,6 +164,12 @@ starts with `12-` show on the card and the task page with GitHub's review decisi
 queued. Webhooks arrive on a separate port (8081) so the tunnel exposes nothing else. Until sign-in with GitHub exists,
 keep the API on localhost: anyone who can reach it could file issues in any repository the app is installed on.
 
+**Import GitHub issue** (the board's repository menu) lists the repository's open issues and makes a card from the one
+you pick; each issue can be a card on one board only. The card is refined like any other, and approving its spec posts
+the spec as one comment on the issue (approving a later version edits that comment). GitHub keeps owning the issue's
+title and body. Mind that an imported issue's text becomes the Refiner's brief, so anyone who can open issues on the
+repository writes briefs for it; the Refiner stays read-only either way.
+
 To regenerate the screenshots and demo in `docs/media`, keep the API running and run
 `apps/flutter_app/tool/readme_media.sh` (macOS; drives the app with a `demo` account and needs ffmpeg).
 

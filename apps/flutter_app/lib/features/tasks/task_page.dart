@@ -209,6 +209,9 @@ class _ActivityList extends StatelessWidget {
     'refinement_failed' => 'saw a refinement fail: ${a.data['error']}',
     'github_issue_created' =>
       'saw GitHub issue${a.data['number'] == null ? '' : ' #${a.data['number']}'} created',
+    'github_issue_imported' => 'imported GitHub issue #${a.data['number']}',
+    'github_comment_posted' =>
+      'saw spec v${a.data['version']} posted on the GitHub issue',
     'moved' => 'moved it from ${a.data['from']} to ${a.data['to']}',
     'updated' => [
       if (a.data['title'] case {'from': final from, 'to': final to})

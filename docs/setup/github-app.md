@@ -1,6 +1,8 @@
 # GitHub App setup (development)
 
-The API uses a GitHub App to create one issue per approved spec and to follow the pull requests linked to it. Register
+The API uses a GitHub App to create one issue per approved spec and to follow the pull requests linked to it. It also
+lists a board repository's open issues so you can import one as a card; approving that card's spec posts the spec as one
+comment on the issue (a later approved version edits the same comment) and never touches the issue's title or body. Register
 one app for development; use a separate one for production later. Takes about 15 minutes.
 
 The private key and the webhook secret are the only secrets. Neither goes in the repository, in chat, or in the
@@ -50,7 +52,7 @@ Profile picture → **Settings** → **Developer settings** → **GitHub Apps** 
 | Permission | Access | Why |
 | --- | --- | --- |
 | Contents | Read-only | The PR query reads each linked PR's head commit and its CI status; GitHub may require this for commit data (unverified until a real install; there is no cloud worker that clones) |
-| Issues | Read and write | One issue per approved spec |
+| Issues | Read and write | One issue per approved spec; listing and importing open issues; the spec comment on an imported issue (issue comments need nothing more) |
 | Pull requests | Read-only | Linked PRs and their reviews |
 | Checks | Read-only | CI status |
 | Commit statuses | Read-only | CI status from older CI systems |
@@ -98,3 +100,6 @@ GitHub couldn't send in the meantime can be redelivered from **Advanced → Rece
 - Until sign-in with GitHub exists, anyone who can reach the API can point a board at any repository the app is
   installed on and file issues there. Keep the API on localhost (the default) and install the app only on
   repositories you own.
+- An imported issue's title and body become the card's brief, which the Refiner reads: anyone who can open issues on
+  the repository writes briefs for it. The Refiner stays read-only either way (it can only read, list, glob and grep a
+  copy of the checkout), and the spec it writes is posted only after a person approves it.
