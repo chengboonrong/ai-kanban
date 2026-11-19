@@ -238,7 +238,9 @@ class HomePage extends ConsumerWidget {
             // Shifted by the theme's button padding so the label lines up with the workspace names above.
             Transform.translate(
               offset: Offset(
-                -(theme.textButtonTheme.style?.padding?.resolve({})?.horizontal ??
+                -(theme.textButtonTheme.style?.padding
+                            ?.resolve({})
+                            ?.horizontal ??
                         0) /
                     2,
                 0,
