@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
 import '../../core/models.dart';
+import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../boards/board_page.dart';
 
@@ -31,46 +33,134 @@ Future<void> _open(BuildContext context, String url) async {
   }
 }
 
-/// Icon, text (also what a screen reader hears) and colour of one status.
-typedef _Look = (IconData, String, Color);
+/// How a status reads: neutral and quiet tags are outlined, the rest carry their state as a fill.
+enum StatusTone { neutral, quiet, active, good, bad }
 
-/// Success, waiting and problem colours, readable on light and dark surfaces.
-(Color, Color, Color) _palette(BuildContext context) {
-  final dark = Theme.of(context).brightness == Brightness.dark;
-  return (
-    dark ? Colors.green.shade300 : Colors.green.shade800,
-    dark ? Colors.orange.shade300 : Colors.orange.shade900,
-    Theme.of(context).colorScheme.error,
+/// A small, non-interactive state key: a glyph and a short label on a pill tinted by [tone].
+/// [glyph] defaults to the tone's own; [motion] is still unless the state is running or just arrived.
+class StatusChip extends StatelessWidget {
+  const StatusChip({
+    super.key,
+    required this.label,
+    required this.tone,
+    this.glyph,
+    this.motion = GlyphMotion.still,
+  });
+  final String label;
+  final StatusTone tone;
+  final Glyph? glyph;
+  final GlyphMotion motion;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    // Text, ground and border.
+    final (fg, bg, line) = switch (tone) {
+      StatusTone.neutral => (t.ink, Colors.transparent, t.rule),
+      StatusTone.quiet => (t.muted, Colors.transparent, t.rule),
+      StatusTone.active => (t.paper2, t.ink, t.ink),
+      StatusTone.good => (t.green, t.greenSoft, t.greenSoft),
+      StatusTone.bad => (t.danger, Colors.transparent, t.danger),
+    };
+    final g =
+        glyph ??
+        switch (tone) {
+          StatusTone.good => Glyph.verified,
+          StatusTone.bad => Glyph.failed,
+          StatusTone.active => Glyph.activity,
+          _ => Glyph.workerOff,
+        };
+    return Chip(
+      avatar: GlyphIcon(g, size: 14, color: fg, motion: motion),
+      label: Text(label),
+      labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(color: fg),
+      labelPadding: const EdgeInsets.only(left: 2, right: 6),
+      padding: const EdgeInsets.only(left: 6),
+      backgroundColor: bg,
+      side: BorderSide(color: line),
+      shape: const StadiumBorder(),
+      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+  }
+}
+
+/// A small rounded-square colour key carrying one glyph: section headings and activity rows.
+class SquareKey extends StatelessWidget {
+  const SquareKey(
+    this.glyph, {
+    super.key,
+    required this.color,
+    this.ink,
+    this.size = 18,
+  });
+  final Glyph glyph;
+  final Color color;
+
+  /// The glyph's colour; the sheet colour by default, which reads on every key but [Tokens.idle].
+  final Color? ink;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: size,
+    height: size,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(size * 0.28),
+    ),
+    child: GlyphIcon(
+      glyph,
+      size: size * 0.66,
+      color: ink ?? context.tokens.paper2,
+      motion: GlyphMotion.still,
+    ),
   );
 }
 
-_Look? _ciLook(String? ci, BuildContext context) {
-  final (good, waiting, bad) = _palette(context);
-  return switch (ci) {
-    'success' => (Icons.check_circle_outline, 'CI passing', good),
-    'failure' => (Icons.cancel_outlined, 'CI failing', bad),
-    'pending' => (Icons.pending_outlined, 'CI running', waiting),
-    _ => null,
-  };
+/// A section heading: a colour key, then the title.
+class KeyHeading extends StatelessWidget {
+  const KeyHeading(
+    this.title, {
+    super.key,
+    required this.glyph,
+    required this.color,
+    this.ink,
+  });
+  final String title;
+  final Glyph glyph;
+  final Color color;
+  final Color? ink;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      SquareKey(glyph, color: color, ink: ink),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+      ),
+    ],
+  );
 }
 
-_Look? _reviewLook(String? review, BuildContext context) {
-  final (good, waiting, bad) = _palette(context);
-  return switch (review) {
-    'approved' => (Icons.thumb_up_outlined, 'Approved', good),
-    'changes_requested' => (
-      Icons.rate_review_outlined,
-      'Changes requested',
-      bad,
-    ),
-    'review_required' => (
-      Icons.visibility_outlined,
-      'Review required',
-      waiting,
-    ),
-    _ => null,
-  };
-}
+/// Text (also what a screen reader hears), tone and glyph of one status.
+typedef _Look = (String, StatusTone, Glyph);
+
+_Look? _ciLook(String? ci) => switch (ci) {
+  'success' => ('CI passing', StatusTone.good, Glyph.verified),
+  'failure' => ('CI failing', StatusTone.bad, Glyph.failed),
+  'pending' => ('CI running', StatusTone.neutral, Glyph.ci),
+  _ => null,
+};
+
+_Look? _reviewLook(String? review) => switch (review) {
+  'approved' => ('Approved', StatusTone.good, Glyph.verified),
+  'changes_requested' => ('Changes requested', StatusTone.bad, Glyph.error),
+  'review_required' => ('Review required', StatusTone.neutral, Glyph.waiting),
+  _ => null,
+};
 
 /// The card's small issue/PR badge: issue number, and the PR count coloured by its worst CI or review state.
 class GitHubBadge extends StatelessWidget {
@@ -80,38 +170,50 @@ class GitHubBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final gh = github;
-    final (good, waiting, bad) = _palette(context);
+    final t = context.tokens;
+    final small = Theme.of(context).textTheme.labelSmall ?? const TextStyle();
+    Color colour(StatusTone tone) => switch (tone) {
+      StatusTone.good => t.green,
+      StatusTone.bad => Theme.of(context).colorScheme.error,
+      _ => t.muted,
+    };
     final issue = switch (gh.issueState) {
-      'pending' => (Icons.sync, 'Issue', 'Creating the GitHub issue', null),
+      'pending' => (
+        Glyph.outbox,
+        'Issue',
+        'Creating the GitHub issue',
+        StatusTone.neutral,
+      ),
       'failed' => (
-        Icons.error_outline,
+        Glyph.error,
         'Issue',
         'Couldn\'t create the GitHub issue',
-        bad,
+        StatusTone.bad,
       ),
       'open' || 'closed' when gh.issueNumber != null => (
-        gh.issueState == 'open' ? Icons.adjust : Icons.check_circle_outline,
+        gh.issueState == 'open' ? Glyph.github : Glyph.verified,
         '#${gh.issueNumber}',
         'Issue #${gh.issueNumber}, ${gh.issueState}',
-        null,
+        StatusTone.neutral,
       ),
       _ => null,
     };
-    final prColor = gh.ci == 'failure' || gh.review == 'changes_requested'
-        ? bad
+    // Waiting outranks passing, so a pending CI on an approved PR stays neutral.
+    final prTone = gh.ci == 'failure' || gh.review == 'changes_requested'
+        ? StatusTone.bad
         : gh.ci == 'pending' || gh.review == 'review_required'
-        ? waiting
+        ? StatusTone.neutral
         : gh.ci == 'success' || gh.review == 'approved'
-        ? good
-        : null;
+        ? StatusTone.good
+        : StatusTone.neutral;
     final description = [
       ?issue?.$3,
       if (gh.prs > 0) ...[
         gh.prs == 1
             ? '1 linked pull request'
             : '${gh.prs} linked pull requests',
-        ?_ciLook(gh.ci, context)?.$2,
-        ?_reviewLook(gh.review, context)?.$2,
+        ?_ciLook(gh.ci)?.$1,
+        ?_reviewLook(gh.review)?.$1,
       ],
     ].join(', ');
     if (description.isEmpty) return const SizedBox.shrink();
@@ -122,18 +224,36 @@ class GitHubBadge extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (issue != null) ...[
-              Icon(issue.$1, size: 14, color: issue.$4),
+            if (issue case (final glyph, final label, _, final tone)) ...[
+              GlyphIcon(
+                glyph,
+                size: 14,
+                color: colour(tone),
+                // Creating the issue is the one thing here still under way.
+                motion: gh.issueState == 'pending'
+                    ? GlyphMotion.loop
+                    : GlyphMotion.still,
+              ),
               const SizedBox(width: 2),
-              Text(issue.$2, style: TextStyle(color: issue.$4)),
+              Text(
+                label,
+                style: (label.startsWith('#') ? t.mono(small) : small).copyWith(
+                  color: colour(tone),
+                ),
+              ),
               const SizedBox(width: 8),
             ],
             if (gh.prs > 0) ...[
-              Icon(Icons.call_merge, size: 14, color: prColor),
+              GlyphIcon(
+                Glyph.pr,
+                size: 14,
+                color: colour(prTone),
+                motion: GlyphMotion.still,
+              ),
               const SizedBox(width: 2),
               Text(
                 gh.prs == 1 ? '1 PR' : '${gh.prs} PRs',
-                style: TextStyle(color: prColor),
+                style: small.copyWith(color: colour(prTone)),
               ),
             ],
           ],
@@ -178,102 +298,150 @@ class GitHubPanel extends ConsumerWidget {
     if (!shown) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
+    final t = context.tokens;
     final async = ref.watch(githubProvider(taskId));
     final gh = async.value;
     final issue = gh?.issue;
+    final line = t.mono(theme.textTheme.bodyMedium!);
+    final failure = theme.textTheme.bodyMedium?.copyWith(color: t.danger);
+    // Creating the issue is the one wait here, so its glyph is the one that moves.
+    final working = GlyphIcon(
+      Glyph.run,
+      size: 16,
+      color: t.accent,
+      motion: GlyphMotion.loop,
+      semanticLabel: 'Loading',
+    );
 
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.code, size: 20),
-                  const SizedBox(width: 8),
-                  Text('GitHub', style: theme.textTheme.titleMedium),
-                ],
-              ),
-              const SizedBox(height: 8),
-              switch (async) {
-                AsyncValue(:final error?) when gh == null => Text(
-                  errorMessage(error),
-                ),
-                _ when gh == null => const LinearProgressIndicator(),
-                _ => Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    switch (issue) {
-                      null => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('No GitHub issue yet'),
-                        trailing: FilledButton.tonal(
-                          onPressed: () => _retry(context, ref),
-                          child: const Text('Create issue'),
+      padding: const EdgeInsets.only(top: 48),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          KeyHeading('GitHub', glyph: Glyph.github, color: t.ink),
+          const SizedBox(height: 8),
+          switch (async) {
+            AsyncValue(:final error?) when gh == null => Text(
+              errorMessage(error),
+              style: failure,
+            ),
+            _ when gh == null => Align(
+              alignment: Alignment.centerLeft,
+              child: working,
+            ),
+            _ => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  decoration: BoxDecoration(border: Border(bottom: t.hairline)),
+                  alignment: Alignment.centerLeft,
+                  child: switch (issue) {
+                    null => Row(
+                      children: [
+                        Expanded(
+                          child: Text('No GitHub issue yet', style: line),
                         ),
-                      ),
-                      GitHubIssue(
-                        state: 'created',
-                        :final number,
-                        :final url,
-                      ) =>
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
+                        OutlinedButton.icon(
+                          onPressed: () => _retry(context, ref),
+                          icon: const GlyphIcon(Glyph.add, size: 16),
+                          label: const Text('Create issue'),
+                        ),
+                      ],
+                    ),
+                    GitHubIssue(state: 'created', :final number, :final url) =>
+                      Row(
+                        children: [
+                          GlyphIcon(
+                            issue.issueState == 'closed'
+                                ? Glyph.verified
+                                : Glyph.github,
+                            size: 18,
+                            color: issue.issueState == 'closed'
+                                ? t.green
+                                : t.ink,
+                            motion: GlyphMotion.once,
+                          ),
+                          const SizedBox(width: 6),
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                              textStyle: line,
+                            ),
+                            iconAlignment: IconAlignment.end,
                             onPressed: url == null
                                 ? null
                                 : () => _open(context, url),
-                            icon: const Icon(Icons.open_in_new, size: 18),
+                            icon: const GlyphIcon(Glyph.open, size: 16),
                             label: Text(
-                              '${issue.imported ? 'Imported from' : 'Issue'} #$number${issue.issueState == 'closed' ? ' (closed)' : ''}',
+                              '${issue.imported ? 'Imported from' : 'Issue'} #$number',
                             ),
                           ),
+                          if (issue.issueState case final state?) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              '· $state',
+                              style: line.copyWith(color: t.muted),
+                            ),
+                          ],
+                        ],
+                      ),
+                    GitHubIssue(state: 'failed', :final error) => Row(
+                      children: [
+                        GlyphIcon(
+                          Glyph.failed,
+                          size: 18,
+                          color: t.danger,
+                          motion: GlyphMotion.once,
                         ),
-                      GitHubIssue(state: 'failed', :final error) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          Icons.error_outline,
-                          color: theme.colorScheme.error,
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Couldn\'t create the issue', style: line),
+                              Text(error ?? '', style: failure),
+                            ],
+                          ),
                         ),
-                        title: const Text('Couldn\'t create the issue'),
-                        subtitle: Text(error ?? ''),
-                        trailing: FilledButton.tonal(
+                        const SizedBox(width: 16),
+                        FilledButton(
                           onPressed: () => _retry(context, ref),
                           child: const Text('Retry'),
                         ),
-                      ),
-                      _ => const Row(
-                        children: [
-                          SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          SizedBox(width: 8),
-                          Text('Creating issue…'),
-                        ],
-                      ),
-                    },
-                    if (gh.comment case final comment?)
-                      _SpecCommentRow(
-                        comment: comment,
-                        onRetry: () => _retry(context, ref, comment: true),
-                      ),
-                    for (final pr in gh.prs) _PullRequestTile(pr: pr),
-                    if (gh.prs.isEmpty && issue?.state == 'created')
-                      Text(
-                        'No linked pull requests yet. A PR links when it says "Closes #${issue!.number}" '
-                        'or its branch starts with "${issue.number}-".',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                  ],
+                      ],
+                    ),
+                    _ => Row(
+                      children: [
+                        working,
+                        const SizedBox(width: 10),
+                        Text('Creating issue…', style: line),
+                      ],
+                    ),
+                  },
                 ),
-              },
-            ],
-          ),
-        ),
+                if (gh.comment case final comment?)
+                  _SpecCommentRow(
+                    comment: comment,
+                    onRetry: () => _retry(context, ref, comment: true),
+                  ),
+                for (final pr in gh.prs) _PullRequestTile(pr: pr),
+                if (gh.prs.isEmpty && issue?.state == 'created')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'No linked pull requests yet. A PR links when it says "Closes #${issue!.number}" '
+                      'or its branch starts with "${issue.number}-".',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+              ],
+            ),
+          },
+        ],
       ),
     );
   }
@@ -287,40 +455,61 @@ class _SpecCommentRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final t = context.tokens;
+    final line = theme.textTheme.bodyMedium!;
     final v = comment.version;
-    return switch (comment) {
-      SpecComment(state: 'posted', :final url?) => Align(
-        alignment: Alignment.centerLeft,
-        child: TextButton.icon(
+    return Container(
+      constraints: const BoxConstraints(minHeight: 48),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(border: Border(bottom: t.hairline)),
+      alignment: Alignment.centerLeft,
+      child: switch (comment) {
+        SpecComment(state: 'posted', :final url?) => TextButton.icon(
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+          ),
           onPressed: () => _open(context, url),
-          icon: const Icon(Icons.comment_outlined, size: 18),
+          icon: GlyphIcon(Glyph.comment, size: 16, color: t.green),
           label: Text('Spec v$v posted on the issue'),
         ),
-      ),
-      SpecComment(state: 'failed', :final error) => ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(
-          Icons.error_outline,
-          color: Theme.of(context).colorScheme.error,
+        SpecComment(state: 'failed', :final error) => Row(
+          children: [
+            GlyphIcon(
+              Glyph.failed,
+              size: 18,
+              color: t.danger,
+              motion: GlyphMotion.once,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Couldn\'t post spec v$v on the issue', style: line),
+                  Text(error ?? '', style: line.copyWith(color: t.danger)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            FilledButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
         ),
-        title: Text('Couldn\'t post spec v$v on the issue'),
-        subtitle: Text(error ?? ''),
-        trailing: FilledButton.tonal(
-          onPressed: onRetry,
-          child: const Text('Retry'),
+        _ => Row(
+          children: [
+            GlyphIcon(
+              Glyph.run,
+              size: 16,
+              color: t.accent,
+              motion: GlyphMotion.loop,
+              semanticLabel: 'Loading',
+            ),
+            const SizedBox(width: 10),
+            Text('Posting spec v$v on the issue…', style: line),
+          ],
         ),
-      ),
-      _ => Row(
-        children: [
-          const SizedBox.square(
-            dimension: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          const SizedBox(width: 8),
-          Text('Posting spec v$v on the issue…'),
-        ],
-      ),
-    };
+      },
+    );
   }
 }
 
@@ -399,7 +588,10 @@ class _ImportIssueDialogState extends ConsumerState<ImportIssueDialog> {
               autofocus: true,
               decoration: const InputDecoration(
                 hintText: 'Filter by title or #number',
-                prefixIcon: Icon(Icons.search),
+                prefixIcon: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: GlyphIcon(Glyph.search, size: 18),
+                ),
                 isDense: true,
               ),
               onChanged: (v) =>
@@ -432,7 +624,14 @@ class _ImportIssueDialogState extends ConsumerState<ImportIssueDialog> {
                   else if (_loading)
                     const Padding(
                       padding: EdgeInsets.all(16),
-                      child: Center(child: CircularProgressIndicator()),
+                      child: Center(
+                        child: GlyphIcon(
+                          Glyph.run,
+                          size: 20,
+                          motion: GlyphMotion.loop,
+                          semanticLabel: 'Loading',
+                        ),
+                      ),
                     )
                   else if (_more)
                     TextButton(onPressed: _next, child: const Text('More'))
@@ -467,47 +666,71 @@ class _PullRequestTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (good, _, _) = _palette(context);
-    final muted = Theme.of(context).colorScheme.outline;
+    final theme = Theme.of(context);
+    final t = context.tokens;
+    final merged = pr.state == 'merged';
     final _Look state = switch (pr.state) {
-      'merged' => (Icons.merge, 'Merged', Colors.purple),
-      'closed' => (Icons.close, 'Closed', muted),
-      _ => (Icons.call_merge, 'Open', good),
+      'merged' => ('Merged', StatusTone.good, Glyph.merged),
+      'closed' => ('Closed', StatusTone.quiet, Glyph.close),
+      _ => ('Open', StatusTone.neutral, Glyph.pr),
     };
     final chips = <_Look>[
       state,
-      if (pr.draft) (Icons.edit_note, 'Draft', muted),
-      ?_reviewLook(pr.review, context),
-      ?_ciLook(pr.ci, context),
+      if (pr.draft) ('Draft', StatusTone.neutral, Glyph.edit),
+      ?_reviewLook(pr.review),
+      ?_ciLook(pr.ci),
     ];
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      title: Text(pr.title),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${pr.repository}#${pr.number}${pr.author == null ? '' : ' by ${pr.author}'}',
-          ),
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 4,
-            runSpacing: 4,
-            children: [
-              for (final (icon, label, color) in chips)
-                Chip(
-                  avatar: Icon(icon, size: 16, color: color),
-                  label: Text(label),
-                  side: BorderSide(color: color),
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-            ],
-          ),
-        ],
+    final small = theme.textTheme.bodySmall!;
+    return DecoratedBox(
+      decoration: BoxDecoration(border: Border(bottom: t.hairline)),
+      child: ListTile(
+        contentPadding: EdgeInsets.zero,
+        minVerticalPadding: 12,
+        leading: SquareKey(
+          merged ? Glyph.merged : Glyph.pr,
+          color: merged ? t.green : t.ink,
+          size: 24,
+        ),
+        minLeadingWidth: 24,
+        title: Text(pr.title, style: theme.textTheme.titleSmall),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 2),
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: '${pr.repository}#${pr.number}',
+                    style: t.mono(small),
+                  ),
+                  if (pr.author != null) TextSpan(text: ' by ${pr.author}'),
+                ],
+              ),
+              style: small,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final (label, tone, glyph) in chips)
+                  StatusChip(
+                    label: label,
+                    tone: tone,
+                    glyph: glyph,
+                    // CI is the one chip that can still be under way.
+                    motion: glyph == Glyph.ci
+                        ? GlyphMotion.loop
+                        : GlyphMotion.still,
+                  ),
+              ],
+            ),
+          ],
+        ),
+        trailing: GlyphIcon(Glyph.open, size: 18, color: t.muted),
+        onTap: () => _open(context, pr.url),
       ),
-      trailing: const Icon(Icons.open_in_new, size: 18),
-      onTap: () => _open(context, pr.url),
     );
   }
 }

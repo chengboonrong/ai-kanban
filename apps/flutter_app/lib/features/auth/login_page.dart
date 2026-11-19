@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
+import '../../core/theme.dart';
 import 'auth.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -41,12 +43,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final t = context.tokens;
     return Scaffold(
       body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -55,16 +58,45 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 const SizedBox(height: 8),
                 Text(
                   'Local development sign-in. The API must be running with AUTH_MODE=dev.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                  style: theme.textTheme.bodyMedium?.copyWith(color: t.muted),
+                ),
+                const SizedBox(height: 24),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: t.screen,
+                    borderRadius: BorderRadius.circular(Tokens.radiusScreen),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        GlyphKey(Glyph.worker, color: t.idle, size: 32),
+                        const SizedBox(width: 14),
+                        // What the code proves about sign-in: which API it asks, and that a login name is all it takes.
+                        Expanded(
+                          child: Text(
+                            'Server: ${Uri.base.resolve(apiUrl)}\nSign-in: login name, no password',
+                            style: t.mono(
+                              theme.textTheme.bodySmall!.copyWith(
+                                color: t.screenInk,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 24),
+                // 8px vertical padding brings the field to the button's 40px.
                 TextField(
                   controller: _login,
                   decoration: const InputDecoration(
                     labelText: 'Login',
-                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                   ),
                   onSubmitted: (_) => _submit(),
                 ),
@@ -72,7 +104,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   const SizedBox(height: 8),
                   Text(
                     _error!,
-                    style: TextStyle(color: theme.colorScheme.error),
+                    style: theme.textTheme.bodySmall?.copyWith(color: t.danger),
                   ),
                 ],
                 const SizedBox(height: 16),

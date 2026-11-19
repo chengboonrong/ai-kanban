@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'theme.dart';
 
 /// Runs [action], showing any failure as a SnackBar.
 Future<void> runWithFeedback(
@@ -64,11 +65,14 @@ class _PromptDialogState extends State<_PromptDialog> {
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: Text(widget.title),
-    content: TextField(
-      controller: _controller,
-      autofocus: true,
-      maxLength: widget.maxLength,
-      onSubmitted: (_) => _submit(),
+    content: SizedBox(
+      width: 360,
+      child: TextField(
+        controller: _controller,
+        autofocus: true,
+        maxLength: widget.maxLength,
+        onSubmitted: (_) => _submit(),
+      ),
     ),
     actions: [
       TextButton(
@@ -87,18 +91,36 @@ Future<bool> confirm(
 }) async =>
     await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+      builder: (context) {
+        final t = context.tokens;
+        return AlertDialog(
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Text(message),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(action),
-          ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            // Every confirm guards a destructive step, so its fill is danger red.
+            FilledButton(
+              style:
+                  FilledButton.styleFrom(
+                    backgroundColor: t.danger,
+                    foregroundColor: t.paper2,
+                  ).copyWith(
+                    side: WidgetStateProperty.resolveWith(
+                      (s) => s.contains(WidgetState.focused)
+                          ? BorderSide(color: t.focus, width: 2)
+                          : BorderSide(color: t.danger),
+                    ),
+                  ),
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(action),
+            ),
+          ],
+        );
+      },
     ) ??
     false;

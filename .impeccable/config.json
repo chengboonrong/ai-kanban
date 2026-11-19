@@ -1,0 +1,53 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r2-assigned.html"
+        ],
+        "createdAt": "2026-11-19T02:13:31.121Z",
+        "reason": "Claude: direction sketch for a replacement world; DESIGN.md is being replaced, so its fonts do not bind sketches"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r2-pick.html"
+        ],
+        "createdAt": "2026-11-19T02:13:31.144Z",
+        "reason": "Claude: direction sketch for a replacement world; DESIGN.md is being replaced, so its fonts do not bind sketches"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r2-console.html"
+        ],
+        "createdAt": "2026-11-19T02:13:31.170Z",
+        "reason": "Claude: direction sketch for a replacement world; DESIGN.md is being replaced, so its fonts do not bind sketches"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r2-spectrum.html"
+        ],
+        "createdAt": "2026-11-19T02:13:31.196Z",
+        "reason": "Claude: direction sketch for a replacement world; DESIGN.md is being replaced, so its fonts do not bind sketches"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r2-canon.html"
+        ],
+        "createdAt": "2026-11-19T02:13:31.219Z",
+        "reason": "Claude: direction sketch for a replacement world; DESIGN.md is being replaced, so its fonts do not bind sketches"
+      }
+    ]
+  }
+}

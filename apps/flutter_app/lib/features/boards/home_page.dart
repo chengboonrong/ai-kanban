@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api.dart';
+import '../../core/glyphs.dart';
 import '../../core/models.dart';
+import '../../core/theme.dart';
 import '../../core/widgets.dart';
 import '../auth/auth.dart';
 import '../tasks/outbox.dart';
@@ -20,6 +22,10 @@ class HomePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final workspaces = ref.watch(workspacesProvider);
+    final unsent = ref
+        .watch(outboxProvider)
+        .where((d) => d.error == null)
+        .length;
     final api = ref.read(apiProvider);
 
     Future<void> newWorkspace() async {
@@ -43,19 +49,39 @@ class HomePage extends ConsumerWidget {
       });
     }
 
+    final theme = Theme.of(context);
+    final t = context.tokens;
+    final quiet = theme.textTheme.bodyMedium?.copyWith(color: t.muted);
+    // Cap the ledger at 880px and centre it; the app bar shares the same inset.
+    // Padding (not a box) keeps the whole window scrollable.
+    final side = ((MediaQuery.sizeOf(context).width - 880) / 2).clamp(
+      16.0,
+      double.infinity,
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Workspaces'),
+        titleSpacing: side,
         actions: [
           IconButton(
             tooltip: 'Workers',
-            icon: const Icon(Icons.computer_outlined),
+            icon: const GlyphIcon(Glyph.worker),
             onPressed: () => context.go('/workers'),
           ),
-          Center(child: Text(ref.watch(authProvider)?.user.login ?? '')),
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 120),
+              child: Text(
+                ref.watch(authProvider)?.user.login ?? '',
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodyMedium?.copyWith(color: t.ink2),
+              ),
+            ),
+          ),
           IconButton(
             tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
+            icon: const GlyphIcon(Glyph.logout),
             onPressed: () async {
               final unsent = ref.read(outboxProvider).length;
               if (unsent > 0 &&
@@ -74,74 +100,170 @@ class HomePage extends ConsumerWidget {
               }
             },
           ),
+          const SizedBox(width: 8),
+          // No icon: keeps the title readable on a 360px phone.
+          FilledButton(
+            onPressed: newWorkspace,
+            child: const Text('New workspace'),
+          ),
+          SizedBox(width: side),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: newWorkspace,
-        icon: const Icon(Icons.add),
-        label: const Text('New workspace'),
-      ),
       body: switch (workspaces) {
-        AsyncValue(:final value?) when value.items.isEmpty => const Center(
-          child: Text('Create a workspace to get started.'),
-        ),
         AsyncValue(:final value?) => ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+          padding: EdgeInsets.fromLTRB(side, 24, side, 48),
           children: [
-            if (value.offline)
-              const ListTile(
-                leading: Icon(Icons.cloud_off),
-                title: Text('Offline: showing the copy saved on this device.'),
-              ),
-            for (final ws in value.items)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            ws.name,
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                        ),
-                        TextButton.icon(
-                          onPressed: () => newBoard(ws),
-                          icon: const Icon(Icons.add),
-                          label: const Text('New board'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (ws.boards.isEmpty) const Text('No boards yet.'),
-                    // Wrap reflows from one card per row on phones to many on desktop.
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        for (final b in ws.boards)
-                          SizedBox(
-                            width: 240,
-                            child: Card(
-                              child: ListTile(
-                                leading: const Icon(Icons.view_kanban_outlined),
-                                title: Text(b.name),
-                                onTap: () => context.go('/boards/${b.id}'),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
+            if (unsent > 0 || value.offline)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: ScreenStrip(
+                  cells: [
+                    if (unsent > 0)
+                      ScreenCell(
+                        glyph: Glyph.outbox,
+                        label: 'unsent',
+                        value: '$unsent',
+                        motion: value.offline
+                            ? GlyphMotion.still
+                            : GlyphMotion.loop,
+                      ),
+                    if (value.offline)
+                      const ScreenCell(
+                        glyph: Glyph.offline,
+                        label: 'offline',
+                        value: 'saved copy',
+                      ),
                   ],
                 ),
               ),
+            if (value.items.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 24),
+                child: Text('Create a workspace to get started.', style: quiet),
+              ),
+            for (final ws in value.items) ...[
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(ws.name, style: theme.textTheme.titleMedium),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => newBoard(ws),
+                    icon: const GlyphIcon(Glyph.add, size: 18),
+                    label: const Text('New board'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              if (ws.boards.isEmpty)
+                _Ruled(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 12,
+                    ),
+                    child: Text('No boards yet.', style: quiet),
+                  ),
+                ),
+              for (final b in ws.boards)
+                _Ruled(
+                  child: _BoardRow(
+                    name: b.name,
+                    onTap: () => context.go('/boards/${b.id}'),
+                  ),
+                ),
+            ],
           ],
         ),
-        AsyncValue(:final error?) => Center(child: Text(errorMessage(error))),
-        _ => const Center(child: CircularProgressIndicator()),
+        AsyncValue(:final error?) => ListView(
+          padding: EdgeInsets.fromLTRB(side, 24, side, 24),
+          children: [
+            Text(
+              errorMessage(error),
+              style: theme.textTheme.bodyMedium?.copyWith(color: t.danger),
+            ),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () => ref.invalidate(workspacesProvider),
+                icon: const GlyphIcon(Glyph.ci, size: 18),
+                label: const Text('Retry'),
+              ),
+            ),
+          ],
+        ),
+        _ => Padding(
+          padding: const EdgeInsets.only(top: 48),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: GlyphIcon(
+              Glyph.run,
+              size: 28,
+              color: t.muted,
+              motion: GlyphMotion.loop,
+              semanticLabel: 'Loading',
+            ),
+          ),
+        ),
       },
+    );
+  }
+}
+
+/// One line of the ledger: a hairline above it, so the heading's first row is ruled off too.
+class _Ruled extends StatelessWidget {
+  const _Ruled({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(border: Border(top: context.tokens.hairline)),
+    child: child,
+  );
+}
+
+/// A full-width board row: square so its hover tint sits flush between the hairlines. A TextButton so press and
+/// the 2px focus ring come from the theme.
+class _BoardRow extends StatelessWidget {
+  const _BoardRow({required this.name, required this.onTap});
+  final String name;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final text = Theme.of(context).textTheme;
+    return TextButton(
+      onPressed: onTap,
+      style:
+          TextButton.styleFrom(
+            alignment: Alignment.centerLeft,
+            minimumSize: const Size.fromHeight(52),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            foregroundColor: t.ink,
+            textStyle: text.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+            shape: const RoundedRectangleBorder(),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ).copyWith(
+            overlayColor: WidgetStateProperty.resolveWith(
+              (s) => s.contains(WidgetState.pressed)
+                  ? t.rule
+                  : s.contains(WidgetState.hovered)
+                  ? t.paper3
+                  : null,
+            ),
+          ),
+      child: Row(
+        children: [
+          GlyphKey(Glyph.board, color: t.paper2, size: 28),
+          const SizedBox(width: 12),
+          Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
+          const SizedBox(width: 8),
+          GlyphIcon(Glyph.next, color: t.muted),
+        ],
+      ),
     );
   }
 }

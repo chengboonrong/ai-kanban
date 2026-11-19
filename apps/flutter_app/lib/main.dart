@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/router.dart';
+import 'core/theme.dart';
 import 'core/user_store.dart';
 import 'features/tasks/outbox.dart';
 
@@ -29,11 +30,8 @@ class App extends ConsumerWidget {
     return MaterialApp.router(
       title: 'AI Kanban',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.indigo),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.indigo,
-        brightness: Brightness.dark,
-      ),
+      theme: buildTheme(Brightness.light),
+      darkTheme: buildTheme(Brightness.dark),
       routerConfig: ref.watch(routerProvider),
     );
   }
