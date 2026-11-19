@@ -187,6 +187,7 @@ app's installation token instead: `GET /repos/{repo}/collaborators/{login}/permi
 the transaction of: connecting a board to a repository (a repository without the app gets the same 403, so the answer doesn't reveal
 where the app is installed),
 listing and importing its issues, approving a spec, and retrying an issue or comment. `AUTH_MODE=dev` skips it.
+Decided (#24): GitHub's triage role doesn't count; the endpoint reports triage as `read` and maintain as `write`, so only write, maintain and admin pass. Every gated action reads the repository through the app or writes to it under the app's name (connecting a board also points that person's worker at their checkout), which is a write-level act; revisit when a team asks for triagers to approve specs.
 A user's own rate-limited token doesn't pause the app's GitHub traffic. Rate limits, in memory per process: 10 device codes and 30 token polls per minute per IP, and 30 repository checks
 per minute per user. Behind a proxy set `TRUST_PROXY` to the proxy's address (e.g. `127.0.0.1` for cloudflared on the
 same machine), so the client's IP is used and can't be forged; a hop count or `true` is refused. Deferred: session token in the

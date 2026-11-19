@@ -3,9 +3,19 @@
 # when a notarytool keychain profile exists. Output: build/dist/ai_kanban-<version>.zip
 # SIGN_IDENTITY=... overrides the signing identity (default: first "Developer ID Application" in the keychain).
 # NOTARY_PROFILE=... names the notarytool keychain profile (default: ai-kanban-notary).
+# --publish: also creates a DRAFT GitHub Release v<version> with the notarized zip and its SHA-256 (publish it on GitHub).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 profile=${NOTARY_PROFILE:-ai-kanban-notary}
+publish=${1:-}
+[ -z "$publish" ] || [ "$publish" = --publish ] || { echo "Usage: $0 [--publish]" >&2; exit 2; }
+if [ -n "$publish" ]; then
+  # A release is exactly a pushed commit: no local changes, and that commit on origin/main.
+  [ -z "$(git status --porcelain)" ] || { echo "--publish needs a clean working tree" >&2; exit 1; }
+  commit=$(git rev-parse HEAD)
+  git fetch -q origin
+  git merge-base --is-ancestor "$commit" origin/main || { echo "--publish needs HEAD to be on origin/main" >&2; exit 1; }
+fi
 
 fvm flutter build macos --release
 app="$PWD/build/macos/Build/Products/Release/ai_kanban.app"
@@ -49,5 +59,12 @@ elif ! grep -q 'No Keychain password item found' <<<"$probe"; then
 else
   echo "Signed but NOT notarized (no notarytool keychain profile '$profile')."
   echo "Store credentials once: xcrun notarytool store-credentials $profile --key ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8 --key-id <KEY_ID> --issuer <ISSUER_ID>"
+  [ -z "$publish" ] || { echo "--publish needs a notarized build." >&2; exit 1; }
+fi
+
+if [ -n "$publish" ]; then
+  (cd build/dist && shasum -a 256 "$(basename "$zip")" >"$(basename "$zip").sha256")
+  gh release create "v$version" "$zip" "$zip.sha256" --draft --target "$commit" --title "AI Kanban $version for macOS" \
+    --notes "Signed with Developer ID and notarized by Apple. Unzip and open ai_kanban.app. SHA-256: $(cut -d' ' -f1 "$zip.sha256")"
 fi
 echo "$zip"
