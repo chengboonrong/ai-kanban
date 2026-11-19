@@ -10,6 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'fake_secure.dart';
+
 /// Records createTask calls; [next] decides each call's outcome.
 class FakeApi extends Api {
   FakeApi() : super(Dio());
@@ -53,6 +55,8 @@ Future<ProviderContainer> start(FakeApi api) async {
   final container = ProviderContainer(
     overrides: [
       prefsProvider.overrideWithValue(prefs),
+      sessionStoreProvider.overrideWithValue(SessionStore(prefs, FakeSecure())),
+      initialSessionProvider.overrideWithValue(Session.fromJson(session)),
       apiProvider.overrideWithValue(api),
     ],
   );
@@ -61,11 +65,7 @@ Future<ProviderContainer> start(FakeApi api) async {
 }
 
 void main() {
-  setUp(
-    () => SharedPreferences.setMockInitialValues({
-      'session': jsonEncode(session),
-    }),
-  );
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
   test('a task captured offline survives a restart and is sent once, with its original key', () async {
     final api = FakeApi()..next = (_) => offline;
