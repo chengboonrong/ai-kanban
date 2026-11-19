@@ -40,6 +40,37 @@ export interface AppOptions {
   github?: GitHubClient;
   /** Sends invite emails; without one, AUTH_MODE=github refuses invites (503) and AUTH_MODE=dev logs the link. */
   mailer?: Mailer;
+  /** AUTH_MODE=github only: GitHub user ids allowed to sign in; empty means anyone. See allowedGithubIdsFromEnv. */
+  allowedGithubIds?: (number | string)[];
+}
+
+const NOT_ALLOWED = "This GitHub account isn't allowed to sign in here";
+
+/** GITHUB_ALLOWED_LOGINS is only read in AUTH_MODE=github; set elsewhere, it would be silently ignored, so refuse to start. */
+export function assertAllowlistMode(authMode: string, v = process.env.GITHUB_ALLOWED_LOGINS) {
+  if (v?.trim() && authMode !== 'github') throw new Error(`GITHUB_ALLOWED_LOGINS needs AUTH_MODE=github (got "${authMode}")`);
+}
+
+/**
+ * GITHUB_ALLOWED_LOGINS: comma-separated GitHub logins or numeric user ids, pinned to ids here, once (a login can be renamed and
+ * then claimed by someone else; the id can't). Unset or blank means anyone; anything else that doesn't resolve throws, so a typo never opens sign-in.
+ */
+export async function allowedGithubIdsFromEnv(gh: Pick<GitHubClient, 'userByLogin'>, v = process.env.GITHUB_ALLOWED_LOGINS): Promise<string[]> {
+  if (!v?.trim()) return [];
+  const entries = v.split(',').map((e) => e.trim()).filter(Boolean);
+  if (!entries.length) throw new Error(`GITHUB_ALLOWED_LOGINS=${JSON.stringify(v)} names no one; unset it to let anyone sign in`);
+  const ids = await Promise.all(
+    entries.map(async (e) => {
+      if (/^\d+$/.test(e)) return BigInt(e).toString();
+      const user = await gh.userByLogin(e).catch((err: Error) => {
+        throw new Error(`GITHUB_ALLOWED_LOGINS: can't resolve "${e}" to a GitHub user (${err.message})`);
+      });
+      if (user.type !== 'User') throw new Error(`GITHUB_ALLOWED_LOGINS: "${e}" is an organization, not a user`);
+      return String(user.id);
+    }),
+  );
+  console.info(`GITHUB_ALLOWED_LOGINS: ${entries.map((e, i) => `${e}=${ids[i]}`).join(', ')}`);
+  return ids;
 }
 
 const bearer = (header = '') => /^Bearer (\S+)$/.exec(header)?.[1];
@@ -69,7 +100,7 @@ function trustProxy(v = process.env.TRUST_PROXY): string | false {
   return v;
 }
 
-export async function buildApp({ pool, authMode, logger = false, github, mailer }: AppOptions) {
+export async function buildApp({ pool, authMode, logger = false, github, mailer, allowedGithubIds = [] }: AppOptions) {
   if (authMode === 'dev' && process.env.NODE_ENV === 'production') {
     throw new Error('AUTH_MODE=dev is refused when NODE_ENV=production');
   }
@@ -93,6 +124,9 @@ export async function buildApp({ pool, authMode, logger = false, github, mailer 
     return reply.code(500).send({ statusCode: 500, error: 'Internal Server Error', message: 'Internal server error' });
   });
 
+  const allowed = new Set(allowedGithubIds.map(String));
+  const refused = (githubId: number | string) => allowed.size > 0 && !allowed.has(String(githubId));
+
   app.decorateRequest('userId', '');
   app.decorateRequest('workerId', '');
   app.addHook('onRequest', async (req) => {
@@ -109,6 +143,7 @@ export async function buildApp({ pool, authMode, logger = false, github, mailer 
       );
       if (!rows[0]) throw httpError(401, 'Invalid worker token');
       if (github && !rows[0].github_id) throw httpError(401, 'Sign in with GitHub');
+      if (github && refused(rows[0].github_id)) throw httpError(401, NOT_ALLOWED);
       req.workerId = rows[0].id;
       req.userId = rows[0].owner_id;
       return;
@@ -119,6 +154,7 @@ export async function buildApp({ pool, authMode, logger = false, github, mailer 
     );
     if (!rows[0]) throw httpError(401, 'Invalid or expired session');
     if (github && !rows[0].github_id) throw httpError(401, 'Sign in with GitHub');
+    if (github && refused(rows[0].github_id)) throw httpError(401, NOT_ALLOWED);
     req.userId = rows[0].user_id;
   });
 
@@ -191,6 +227,7 @@ export async function buildApp({ pool, authMode, logger = false, github, mailer 
         if (typeof t.access_token !== 'string') throw new GitHubError(502, `GitHub refused the sign-in: ${t.error ?? 'no token'}`, false);
         // The token is used once, to learn who this is, and dropped: access checks use the app's own token.
         const me = await gh.user(t.access_token);
+        if (refused(me.id)) throw httpError(403, NOT_ALLOWED);
         // 403/404: an install that hasn't granted the Email addresses permission yet; sign-in works, invites can't be accepted.
         const emails = await gh.emails(t.access_token).catch((e) => {
           if (e instanceof GitHubError && !e.retryable && (e.status === 403 || e.status === 404)) return [];
