@@ -964,7 +964,7 @@ test('GitHub sign-in: pending, slow_down, then a user and a session; a spent cod
   assert.deepEqual((await app.inject({ method: 'GET', url: '/health' })).json(), { ok: true, auth: 'dev' });
   assert.equal((await ghApp.inject({ method: 'POST', url: '/auth/dev-login', payload: { login: 'x' } })).statusCode, 401, 'no dev login (not a public route)');
 
-  const res = await ghApp.inject({ method: 'POST', url: '/auth/github/device' });
+  const res = await ghApp.inject({ method: 'POST', url: '/auth/github/device', remoteAddress: `10.${randomInt(256)}.${randomInt(256)}.1` });
   const started = res.json();
   assert.deepEqual({ ...started, deviceCode: typeof started.deviceCode }, {
     deviceCode: 'string', userCode: 'WDJB-MJHT', verificationUri: `${config.webUrl}/login/device`, interval: 5, expiresIn: 900,
@@ -1031,6 +1031,24 @@ test("a user's rate-limited token doesn't pause the app's own GitHub traffic", a
   assert.deepEqual(await client.app(f.repository), { id: APP_ID, slug: 'ai-kanban-test' }, 'the installation call still goes out');
 });
 
+test('a rate limit seen by one client pauses another client on the same database', async () => {
+  const f = await fixture();
+  const first = gitHubClient(config, pool); // two clients stand in for two API processes
+  const second = gitHubClient(config, pool);
+  f.repo.failures.push({ match: 'POST /issues', status: 429, headers: { 'retry-after': '600' } });
+  try {
+    await assert.rejects(first.request(f.repository, 'POST', `/repos/${f.repository}/issues`, { title: 'x' }), (e: GitHubError) => e.retryable);
+    const before = calls.length;
+    await assert.rejects(second.request(f.repository, 'GET', `/repos/${f.repository}`),
+      (e: GitHubError) => e.status === 429 && /waiting for it to reset/.test(e.message) && Math.abs((e.retryAfter ?? 0) - 600_000) < 5_000);
+    assert.equal(calls.length, before, 'the second client sent nothing');
+    await assert.rejects(gitHubClient(config, pool).app(f.repository), /waiting for it to reset/, 'a client started later honours it too');
+  } finally {
+    await pool.query('UPDATE github_pause SET until = now()');
+  }
+  assert.deepEqual(await gitHubClient(config, pool).app(f.repository), { id: APP_ID, slug: 'ai-kanban-test' }, 'once it lapses, calls go out');
+});
+
 test('github mode: repository actions need write access on GitHub and the app installed there; dev mode skips the check', async () => {
   // A GitHub user; the setup goes through the dev API (no gate) with the same session, as both apps share the database.
   const me = ghUser(`gh-${randomUUID().slice(0, 8)}`);
@@ -1079,13 +1097,14 @@ test('github mode: repository actions need write access on GitHub and the app in
 });
 
 test('rate limits: device codes per IP, repository checks per user', async () => {
+  const net = `10.${randomInt(256)}.${randomInt(256)}`; // limits now outlive a test run: fresh addresses each time
   const fromIp = (remoteAddress: string) => ghApp.inject({ method: 'POST', url: '/auth/github/device', remoteAddress });
-  for (let i = 0; i < 10; i++) assert.equal((await fromIp('10.1.1.1')).statusCode, 200);
-  const limited = await fromIp('10.1.1.1');
+  for (let i = 0; i < 10; i++) assert.equal((await fromIp(`${net}.1`)).statusCode, 200);
+  const limited = await fromIp(`${net}.1`);
   assert.equal(limited.statusCode, 429);
   assert.ok(Number(limited.headers['retry-after']) > 0, 'retry-after');
   assert.match(limited.json().message, /^Too many requests; try again in \d+ s$/);
-  assert.equal((await fromIp('10.1.1.2')).statusCode, 200, 'another address');
+  assert.equal((await fromIp(`${net}.2`)).statusCode, 200, 'another address');
 
   const gated = async () => {
     const me = ghUser(`gh-${randomUUID().slice(0, 8)}`);
@@ -1111,9 +1130,10 @@ test('TRUST_PROXY names the proxy: a client-supplied X-Forwarded-For entry does 
   delete process.env.TRUST_PROXY;
   const fromProxy = (forwarded: string) =>
     proxied.inject({ method: 'POST', url: '/auth/github/device', remoteAddress: '127.0.0.1', headers: { 'x-forwarded-for': forwarded } });
-  for (let i = 0; i < 10; i++) assert.equal((await fromProxy(`198.51.100.${i}, 10.3.3.3`)).statusCode, 200);
-  assert.equal((await fromProxy('198.51.100.99, 10.3.3.3')).statusCode, 429, 'the proxy-added entry is the key');
-  assert.equal((await fromProxy('10.3.3.3, 10.3.3.4')).statusCode, 200, 'another client');
+  const t = `10.${randomInt(256)}.${randomInt(256)}`; // fresh each run: limits outlive it
+  for (let i = 0; i < 10; i++) assert.equal((await fromProxy(`198.51.100.${i}, ${t}.3`)).statusCode, 200);
+  assert.equal((await fromProxy(`198.51.100.99, ${t}.3`)).statusCode, 429, 'the proxy-added entry is the key');
+  assert.equal((await fromProxy(`${t}.3, ${t}.4`)).statusCode, 200, 'another client');
   await proxied.close();
 });
 

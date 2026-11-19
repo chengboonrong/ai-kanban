@@ -156,7 +156,7 @@ own, so no transaction is open across a call to GitHub; it files the issue as th
 spec, body built from it with `@` mentions neutralised, capped at 60,000 characters, starting with a hidden
 `ai-kanban:task` marker). Every attempt after the first lists the repository's recent issues and adopts one the app
 created with that marker; the lease is renewed just before each create and outlasts it, and the attempt count fences
-every write, so a lost response or a crash mid-request never creates a second issue. After a rate limit the client
+every write, so a lost response or a crash mid-request never creates a second issue. After a rate limit (recorded in Postgres, so every API process honours it; each reads it at most every 5 s) the client
 sends nothing until GitHub's reset. Webhooks arrive on a
 separate listener (port 8081) that verifies the HMAC signature on the raw body and records the delivery id and its
 effects in one transaction, so redeliveries are no-ops and a failed delivery can be redelivered by hand (GitHub doesn't retry). Events only mark PRs
@@ -193,7 +193,7 @@ the transaction of: connecting a board to a repository (a repository without the
 where the app is installed),
 listing and importing its issues, approving a spec, and retrying an issue or comment. `AUTH_MODE=dev` skips it.
 Decided (#24): GitHub's triage role doesn't count; the endpoint reports triage as `read` and maintain as `write`, so only write, maintain and admin pass. Every gated action reads the repository through the app or writes to it under the app's name (connecting a board also points that person's worker at their checkout), which is a write-level act; revisit when a team asks for triagers to approve specs.
-A user's own rate-limited token doesn't pause the app's GitHub traffic. Rate limits, in memory per process: 10 device codes and 30 token polls per minute per IP, and 30 repository checks
+A user's own rate-limited token doesn't pause the app's GitHub traffic. Rate limits, counted in Postgres so API instances share them: 10 device codes and 30 token polls per minute per IP, and 30 repository checks
 per minute per user. Behind a proxy set `TRUST_PROXY` to the proxy's address (e.g. `127.0.0.1` for cloudflared on the
 same machine), so the client's IP is used and can't be forged; a hop count or `true` is refused. Deferred: session token in the
 Keychain (it is in app preferences), a sign-in allowlist, the triage role.
@@ -212,7 +212,7 @@ person, and a revoke racing an accept loses to it or wins outright. Removing a m
 which every board, task and run check joins, so access ends with the next request; runs on boards whose repository
 they connected wait until someone connects it again (the board's waiting reason is `connector_left`). The accept call
 carries the token in its body (`POST /invites/accept`), since request logs record URLs; an account with no stored
-addresses gets 403 with `code: 'sign_in_again'`. Rate limits, in memory per process: 20 invite emails per hour per
+addresses gets 403 with `code: 'sign_in_again'`. Rate limits, counted in Postgres so API instances share them: 20 invite emails per hour per
 workspace and per inviter, and 30 accepts per minute per user. Deferred: transferring ownership, per-board membership.
 
 ### Repository security

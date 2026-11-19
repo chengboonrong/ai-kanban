@@ -31,26 +31,42 @@ export const sha256 = (s: string) => createHash('sha256').update(s).digest();
 const tooMany = (wait: number) =>
   Object.assign(httpError(429, `Too many requests; try again in ${wait} s`), { headers: { 'retry-after': String(wait) } });
 
+let cleaned = 0;
+
 /**
- * A fixed-window limit: at most `max` calls per key in each `windowMs` (a minute by default), else 429 with retry-after.
- * Expired keys are dropped at most once a minute; past 100,000 live keys new ones are refused (fails closed rather than
- * growing without bound).
- * ponytail: in memory, per process; move it to a shared store if the API ever runs as more than one instance.
+ * A fixed-window limit shared by every API process: at most `max` calls per `name` + key in each `windowMs` (a minute by
+ * default), else 429 with retry-after. One atomic upsert per check, on the database's clock. A denial is remembered in
+ * the process until its window ends, so a flood of rejected calls costs no database write each (it only ever rejects
+ * sooner; the limit stays shared). Expired rows and remembered denials are dropped by whichever call comes next, at most
+ * once a minute per process; past 100,000 remembered denials, further ones aren't remembered (memory stays bounded).
  */
-export function rateLimit(max: number, windowMs = 60_000) {
-  const windows = new Map<string, { count: number; resetAt: number }>();
-  let cleaned = 0;
-  return (key: string) => {
+export function rateLimit(pool: pg.Pool, name: string, max: number, windowMs = 60_000) {
+  const denied = new Map<string, number>(); // key -> when its denial ends, on this process's clock
+  let pruned = 0;
+  return async (key: string) => {
     const now = Date.now();
-    if (windows.size > 10_000 && now - cleaned >= 60_000) {
+    if (now - cleaned >= 60_000) {
       cleaned = now;
-      for (const [k, w] of windows) if (w.resetAt <= now) windows.delete(k);
+      pool.query('DELETE FROM rate_limits WHERE reset_at <= now()').catch(() => {}); // housekeeping; the next sweep retries
     }
-    let w = windows.get(key);
-    if (!w || w.resetAt <= now) {
-      if (!w && windows.size >= 100_000) throw tooMany(60);
-      windows.set(key, (w = { count: 0, resetAt: now + windowMs }));
+    if (now - pruned >= 60_000) {
+      pruned = now;
+      for (const [k, until] of denied) if (until <= now) denied.delete(k);
     }
-    if (++w.count > max) throw tooMany(Math.ceil((w.resetAt - now) / 1000));
+    const until = denied.get(key);
+    if (until && until > now) throw tooMany(Math.ceil((until - now) / 1000));
+    const { rows: [w] } = await pool.query(
+      `INSERT INTO rate_limits (limiter, key, count, reset_at) VALUES ($1, $2, 1, now() + $3 * interval '1 millisecond')
+       ON CONFLICT (limiter, key) DO UPDATE SET
+         count = CASE WHEN rate_limits.reset_at <= now() THEN 1 ELSE rate_limits.count + 1 END,
+         reset_at = CASE WHEN rate_limits.reset_at <= now() THEN now() + $3 * interval '1 millisecond' ELSE rate_limits.reset_at END
+       RETURNING count, ceil(extract(epoch FROM reset_at - now()))::int AS wait`,
+      [name, key, windowMs],
+    );
+    if (w.count > max) {
+      const wait = Math.max(w.wait, 1);
+      if (denied.size < 100_000) denied.set(key, Date.now() + wait * 1000);
+      throw tooMany(wait);
+    }
   };
 }

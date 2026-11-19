@@ -10,7 +10,7 @@ const pool = createPool();
 await migrate(pool);
 const host = process.env.HOST ?? '127.0.0.1';
 const { config: github, missing } = githubConfigFromEnv();
-const gh = github && gitHubClient(github);
+const gh = github && gitHubClient(github, pool);
 const app = await buildApp({ pool, authMode: process.env.AUTH_MODE ?? 'none', logger: true, github: gh, mailer: mailerFromEnv() });
 await app.listen({ host, port: Number(process.env.PORT ?? 8080) });
 

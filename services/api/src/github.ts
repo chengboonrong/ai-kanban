@@ -1,5 +1,6 @@
 import { createHmac, createPrivateKey, sign, timingSafeEqual, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import type pg from 'pg';
 
 /** GitHub REST API version this code is written against. */
 const API_VERSION = '2026-03-10';
@@ -60,13 +61,41 @@ export class GitHubError extends Error {
 }
 
 /** Minimal GitHub App client: installation tokens per repository, cached until shortly before they expire. */
-export function gitHubClient(config: GitHubConfig) {
+export function gitHubClient(config: GitHubConfig, pool?: pg.Pool) {
   const installations = new Map<string, { token: string; expires: number; appId: number; appSlug: string }>();
   // ponytail: one pause for the whole app, not per installation; fine while it's installed on a handful of repositories.
   let pausedUntil = 0; // after a rate limit, no request at all until GitHub's reset (GitHub may ban clients that keep going)
+  let pauseRead = 0;
+
+  /**
+   * The pause lives in Postgres, so every API process honours the limit one of them saw. It is read at most every 5 s
+   * (a pause is minutes long; the database clock gives the time left, so a skewed process clock doesn't matter) and set
+   * locally at once. Without a pool (tests) or when the database fails, the process's own value is all there is.
+   */
+  async function refreshPause() {
+    if (!pool || Date.now() - pauseRead < 5_000) return;
+    pauseRead = Date.now();
+    try {
+      const { rows: [r] } = await pool.query('SELECT (extract(epoch FROM until - now()) * 1000)::bigint AS ms FROM github_pause');
+      pausedUntil = Math.max(pausedUntil, Date.now() + Number(r.ms));
+    } catch (e) {
+      console.warn(`GitHub pause: reading the shared value failed: ${(e as Error).message}`); // keep the local value; retried in 5 s
+    }
+  }
+  async function pause(ms: number) {
+    pausedUntil = Math.max(pausedUntil, Date.now() + ms);
+    await pool
+      ?.query(
+        `INSERT INTO github_pause (id, until) VALUES (true, now() + $1 * interval '1 millisecond')
+         ON CONFLICT (id) DO UPDATE SET until = GREATEST(github_pause.until, EXCLUDED.until)`,
+        [ms],
+      )
+      .catch((e: Error) => console.warn(`GitHub pause: saving it failed, only this process will wait: ${e.message}`));
+  }
 
   /** `shared: false` for a user's own token: its rate limit is theirs, so it neither waits for nor sets the app's pause. */
   async function call(method: string, path: string, auth: string, body?: object, { shared = true } = {}) {
+    if (shared) await refreshPause();
     if (shared && Date.now() < pausedUntil) throw new GitHubError(429, 'GitHub rate limit: waiting for it to reset', true, pausedUntil - Date.now());
     let res: Response;
     try {
@@ -91,7 +120,7 @@ export function gitHubClient(config: GitHubConfig) {
     // 403/429 with an exhausted or secondary rate limit is temporary; other 4xx won't fix themselves.
     const limited = res.status === 429 || (res.status === 403 && (res.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(text)));
     const wait = limited ? retryAfter(res.headers) : undefined;
-    if (wait && shared) pausedUntil = Date.now() + wait;
+    if (wait && shared) await pause(wait);
     throw new GitHubError(res.status, message, limited || res.status >= 500, wait);
   }
 
@@ -152,7 +181,7 @@ export function gitHubClient(config: GitHubConfig) {
       };
       if (res.errors?.length) {
         const limited = res.errors.some((e) => e.type === 'RATE_LIMITED');
-        if (limited) pausedUntil = Date.now() + 60_000;
+        if (limited) await pause(60_000);
         throw new GitHubError(200, `GitHub GraphQL: ${res.errors.map((e) => e.message).join('; ')}`, limited, limited ? 60_000 : undefined);
       }
       return res.data as T;

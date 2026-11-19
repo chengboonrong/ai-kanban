@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
-import { createPool } from '../src/db.ts';
+import { createPool, rateLimit } from '../src/db.ts';
 import type { Mailer } from '../src/mail.ts';
 import { migrate } from '../src/migrate.ts';
 
@@ -435,4 +435,40 @@ test("invite tokens never reach the request log", async () => {
   await logged.close();
   assert.ok(lines.some((l) => l.includes('/invites/accept')), 'requests are logged');
   assert.ok(!lines.some((l) => l.includes(token)), 'the token is not');
+});
+
+test('a denial is remembered in the process: further checks answer 429 without touching the table', async () => {
+  const name = `denied-${randomUUID()}`;
+  const limit = rateLimit(pool, name, 2);
+  const key = randomUUID();
+  await limit(key);
+  await limit(key);
+  await assert.rejects(limit(key), (e: Error & { statusCode: number }) => e.statusCode === 429);
+  await pool.query('DELETE FROM rate_limits WHERE limiter = $1', [name]);
+  await assert.rejects(limit(key), (e: Error & { statusCode: number; headers: Record<string, string> }) =>
+    e.statusCode === 429 && Number(e.headers['retry-after']) > 0, 'still refused with the row gone');
+  const { rowCount } = await pool.query('SELECT 1 FROM rate_limits WHERE limiter = $1', [name]);
+  assert.equal(rowCount, 0, 'and nothing was written');
+  await limit(randomUUID()); // other keys still go to the table
+});
+
+test('two limiter instances on one database enforce one combined limit per key', async () => {
+  // Two instances of the same limiter stand in for two API processes.
+  const name = `shared-${randomUUID()}`;
+  const a = rateLimit(pool, name, 5);
+  const b = rateLimit(pool, name, 5);
+  const key = randomUUID();
+  for (let i = 0; i < 5; i++) await (i % 2 ? a : b)(key);
+  for (const limiter of [a, b]) {
+    await assert.rejects(limiter(key), (e: Error & { statusCode: number; headers: Record<string, string> }) =>
+      e.statusCode === 429 && Number(e.headers['retry-after']) > 0 && /Too many requests; try again in \d+ s/.test(e.message));
+  }
+  await b(randomUUID()); // another key is unaffected
+  await rateLimit(pool, `${name}-other`, 5)(key); // so is another limiter
+
+  // A new window starts once the database clock passes reset_at.
+  await pool.query(`UPDATE rate_limits SET reset_at = now() - interval '1 second' WHERE limiter = $1 AND key = $2`, [name, key]);
+  await rateLimit(pool, name, 5)(key); // a process that hadn't seen the denial (one that had keeps refusing until its window ends)
+  const { rows: [w] } = await pool.query('SELECT count FROM rate_limits WHERE limiter = $1 AND key = $2', [name, key]);
+  assert.equal(w.count, 1);
 });
