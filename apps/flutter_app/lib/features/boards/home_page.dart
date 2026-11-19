@@ -7,6 +7,7 @@ import '../../core/glyphs.dart';
 import '../../core/models.dart';
 import '../../core/theme.dart';
 import '../../core/widgets.dart';
+import '../agents/workers.dart';
 import '../auth/auth.dart';
 import '../tasks/outbox.dart';
 
@@ -25,6 +26,12 @@ class HomePage extends ConsumerWidget {
     final unsent = ref
         .watch(outboxProvider)
         .where((d) => d.error == null)
+        .length;
+    // Busy workers are online too; null until the first fetch, or while offline.
+    final online = ref
+        .watch(workersProvider)
+        .value
+        ?.where((w) => w.state != 'offline')
         .length;
     final api = ref.read(apiProvider);
 
@@ -112,11 +119,21 @@ class HomePage extends ConsumerWidget {
         AsyncValue(:final value?) => ListView(
           padding: EdgeInsets.fromLTRB(side, 24, side, 48),
           children: [
-            if (unsent > 0 || value.offline)
+            if (online != null || unsent > 0 || value.offline)
               Align(
                 alignment: Alignment.centerLeft,
                 child: ScreenStrip(
                   cells: [
+                    if (online != null)
+                      ScreenCell(
+                        glyph: online > 0 ? Glyph.worker : Glyph.workerOff,
+                        label: 'workers',
+                        value: '$online online',
+                        color: online > 0 ? t.screenGreen : t.screenMuted,
+                        motion: online > 0
+                            ? GlyphMotion.once
+                            : GlyphMotion.still,
+                      ),
                     if (unsent > 0)
                       ScreenCell(
                         glyph: Glyph.outbox,
