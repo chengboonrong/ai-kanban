@@ -94,7 +94,7 @@ export function gitHubClient(config: GitHubConfig, pool?: pg.Pool) {
   }
 
   /** `shared: false` for a user's own token: its rate limit is theirs, so it neither waits for nor sets the app's pause. */
-  async function call(method: string, path: string, auth: string, body?: object, { shared = true } = {}) {
+  async function call(method: string, path: string, auth: string | undefined, body?: object, { shared = true } = {}) {
     if (shared) await refreshPause();
     if (shared && Date.now() < pausedUntil) throw new GitHubError(429, 'GitHub rate limit: waiting for it to reset', true, pausedUntil - Date.now());
     let res: Response;
@@ -103,7 +103,7 @@ export function gitHubClient(config: GitHubConfig, pool?: pg.Pool) {
         method,
         headers: {
           accept: 'application/vnd.github+json',
-          authorization: `Bearer ${auth}`,
+          ...(auth && { authorization: `Bearer ${auth}` }),
           'x-github-api-version': API_VERSION,
           'user-agent': 'ai-kanban',
           ...(body && { 'content-type': 'application/json' }),
@@ -193,6 +193,10 @@ export function gitHubClient(config: GitHubConfig, pool?: pg.Pool) {
       web('/login/oauth/access_token', { device_code: deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }),
     /** The user a (one-shot) user token belongs to. */
     user: (token: string) => call('GET', '/user', token, undefined, { shared: false }) as Promise<{ id: number; login: string; name: string | null }>,
+    /** A user by login: the id a login is pinned to. Unauthenticated, since GitHub answers 401 to an app JWT here. */
+    // ponytail: unauthenticated calls share GitHub's 60 requests/hour per IP; fine for a startup lookup of a few logins.
+    userByLogin: (login: string) =>
+      call('GET', `/users/${encodeURIComponent(login)}`, undefined, undefined, { shared: false }) as Promise<{ id: number; login: string; type: string }>,
     /** The token's user's verified addresses, lowercased (the app's "Email addresses" account permission). */
     async emails(token: string) {
       const list = (await call('GET', '/user/emails?per_page=100', token, undefined, { shared: false })) as { email: string; verified: boolean }[];

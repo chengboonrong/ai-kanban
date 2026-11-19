@@ -180,7 +180,7 @@ To regenerate the screenshots and demo in `docs/media`, keep the API running and
 `npm run dev` starts the API with `AUTH_MODE=dev`: passwordless sign-in by login name, loopback only, refused when
 `NODE_ENV=production`. `AUTH_MODE=github` signs in with GitHub instead (Device Flow: the app shows a code to enter at
 github.com/login/device) and needs the GitHub App configured. Dev accounts don't carry over: their sessions and
-workers stop working, and a GitHub account with the same login starts fresh. No GitHub token is kept: it is used once to learn who you are. To serve
+workers stop working, and a GitHub account with the same login starts fresh. `GITHUB_ALLOWED_LOGINS` (comma-separated logins or numeric ids, pinned to GitHub ids at start, so a restart applies changes) limits who can sign in; unset, anyone can. No GitHub token is kept: it is used once to learn who you are. To serve
 the web build from another origin, list it in `CORS_ORIGINS` (comma-separated). Team invites are emailed when
 `RESEND_API_KEY` and `MAIL_FROM` are set, with links to `APP_URL` (default `http://localhost:3000`); see
 [docs/setup/github-app.md](docs/setup/github-app.md). The app reaches the API at `http://localhost:8080`; override

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { FastifyInstance } from 'fastify';
-import { buildApp } from '../src/app.ts';
+import { allowedGithubIdsFromEnv, assertAllowlistMode, buildApp } from '../src/app.ts';
 import { createPool } from '../src/db.ts';
 import type { Mailer } from '../src/mail.ts';
 import { type GitHubClient, type GitHubConfig, type GitHubError, gitHubClient, validSignature } from '../src/github.ts';
@@ -33,6 +33,8 @@ type FakeRepo = { id: number; issues: FakeIssue[]; comments: FakeComment[]; prs:
 const repos = new Map<string, FakeRepo>();
 // Device Flow: each device code's answers to the token poll, in order (the last one repeats); the user each token belongs to.
 const devices = new Map<string, object[]>();
+/** GET /users/{login}: public profiles, by lower-case login. */
+const knownUsers = new Map<string, { id: number; login: string; type: string }>();
 const tokenUsers = new Map<string, { id: number; login: string; name: string | null }>();
 // GET /user/emails per token; a token without an entry gets the 403 of an app lacking the Email addresses permission.
 const tokenEmails = new Map<string, { email: string; verified: boolean }[]>();
@@ -80,6 +82,11 @@ const fake = createServer(async (req, res) => {
     }
     const me = tokenUsers.get(req.headers.authorization?.replace('Bearer ', '') ?? '');
     return me ? send(200, me) : send(401, { message: 'Bad credentials' });
+  }
+  if (url.pathname.startsWith('/users/')) {
+    if (req.headers.authorization) return send(401, { message: 'Bad credentials' }); // as on github.com: this endpoint rejects an app JWT
+    const known = knownUsers.get(decodeURIComponent(url.pathname.slice(7)).toLowerCase());
+    return known ? send(200, known) : send(404, { message: 'Not Found' });
   }
   if (url.pathname === '/user/emails') {
     const emails = tokenEmails.get(req.headers.authorization?.replace('Bearer ', '') ?? '');
@@ -991,6 +998,79 @@ test('GitHub sign-in: pending, slow_down, then a user and a session; a spent cod
   }
   assert.equal((await poll('never-issued')).statusCode, 400);
   await assert.rejects(buildApp({ pool, authMode: 'github' }), /needs the GitHub App/);
+});
+
+test('GITHUB_ALLOWED_LOGINS: pinned to GitHub ids; an unlisted id is refused with no user row, a renamed one stays in, a removed one loses its session; unset is open', async () => {
+  const [ok, other] = [`ok-${randomUUID().slice(0, 8)}`, `no-${randomUUID().slice(0, 8)}`];
+  const okUser = ghUser(ok);
+  const restricted = await buildApp({ pool, authMode: 'github', github: gh, allowedGithubIds: [okUser.id] });
+  const pollOn = async (me: { id: number; login: string; name: string | null }) => {
+    const code = await device();
+    tokenUsers.set(`gho_${code}`, me);
+    devices.set(code, [{ access_token: `gho_${code}`, token_type: 'bearer', scope: '' }]);
+    return restricted.inject({ method: 'POST', url: '/auth/github/token', payload: { deviceCode: code }, remoteAddress: `10.0.${randomInt(256)}.${randomInt(256)}` });
+  };
+  const refusedRes = await pollOn(ghUser(other));
+  assert.deepEqual([refusedRes.statusCode, refusedRes.json().message], [403, "This GitHub account isn't allowed to sign in here"]);
+  assert.equal((await pool.query('SELECT 1 FROM users WHERE login = $1', [other])).rowCount, 0, 'no user row');
+
+  const okRes = await pollOn({ ...okUser, login: ok.toUpperCase() });
+  assert.equal(okRes.statusCode, 200, okRes.body);
+  const { token } = okRes.json();
+  assert.equal((await as(token, restricted)('GET', '/me')).statusCode, 200);
+  const worker = await pairWorker(as(token, restricted));
+  assert.equal((await pollOn({ ...okUser, login: `renamed-${randomUUID().slice(0, 8)}` })).statusCode, 200, 'a renamed account stays allowed');
+  // Eve registers the name alice gave up: a different id, so refused.
+  assert.equal((await pollOn(ghUser(ok))).statusCode, 403, 'a reclaimed name is not the account');
+
+  // Removed from the list: the session and the worker stop working, though both rows are still there.
+  const removed = await buildApp({ pool, authMode: 'github', github: gh, allowedGithubIds: [ghUser('x').id] });
+  for (const [t, url] of [[token, '/me'], [worker.token, '/worker/me']]) {
+    const res = await removed.inject({ method: 'GET', url, headers: { authorization: `Bearer ${t}` } });
+    assert.deepEqual([res.statusCode, res.json().message], [401, "This GitHub account isn't allowed to sign in here"], url);
+  }
+  assert.equal((await as(token, ghApp)('GET', '/me')).statusCode, 200, 'unset: open');
+  assert.equal((await signIn(ghUser(other))).user.login, other, 'unset: anyone signs in');
+  await Promise.all([restricted.close(), removed.close()]);
+});
+
+test('a user who already has a row is refused once the list excludes them, and nothing of theirs changes', async () => {
+  const me = ghUser(`had-${randomUUID().slice(0, 8)}`, 'Had Row');
+  const first = await signIn(me, [{ email: 'had@example.com', verified: true }]);
+  const snapshot = async () => ({
+    user: (await pool.query('SELECT login, display_name, github_id FROM users WHERE id = $1', [first.user.id])).rows,
+    emails: (await pool.query('SELECT email FROM user_emails WHERE user_id = $1 ORDER BY email', [first.user.id])).rows,
+    sessions: (await pool.query('SELECT count(*)::int AS n FROM sessions WHERE user_id = $1', [first.user.id])).rows,
+  });
+  const before = await snapshot();
+  const restricted = await buildApp({ pool, authMode: 'github', github: gh, allowedGithubIds: [ghUser('someone').id] });
+  const code = await device();
+  tokenUsers.set(`gho_${code}`, { ...me, login: `${me.login}-renamed`, name: 'Changed Name' });
+  tokenEmails.set(`gho_${code}`, [{ email: 'other@example.com', verified: true }]);
+  devices.set(code, [{ access_token: `gho_${code}`, token_type: 'bearer', scope: '' }]);
+  const res = await restricted.inject({ method: 'POST', url: '/auth/github/token', payload: { deviceCode: code }, remoteAddress: `10.0.${randomInt(256)}.${randomInt(256)}` });
+  assert.equal(res.statusCode, 403, res.body);
+  assert.deepEqual(await snapshot(), before, 'login, display name, emails and sessions are as they were');
+  await restricted.close();
+});
+
+test('GITHUB_ALLOWED_LOGINS at startup: logins resolve to ids, ids pass through; unresolvable or empty entries throw; unset or blank is open', async () => {
+  const alice = ghUser(`alice-${randomUUID().slice(0, 8)}`);
+  knownUsers.set(alice.login.toLowerCase(), { id: alice.id, login: alice.login, type: 'User' });
+  const acme = `acme-${randomUUID().slice(0, 8)}`;
+  knownUsers.set(acme, { id: ghUser(acme).id, login: acme, type: 'Organization' });
+  assert.deepEqual(await allowedGithubIdsFromEnv(gh, ` ${alice.login.toUpperCase()} , 42 `), [String(alice.id), '42']);
+  await assert.rejects(allowedGithubIdsFromEnv(gh, `${alice.login},ghost-${randomUUID().slice(0, 8)}`), /can't resolve "ghost-/);
+  await assert.rejects(allowedGithubIdsFromEnv(gh, ','), /names no one/);
+  await assert.rejects(allowedGithubIdsFromEnv(gh, `${acme}`), new RegExp(`"${acme}" is an organization, not a user`));
+  assert.deepEqual(await allowedGithubIdsFromEnv(gh, '0042'), ['42'], 'leading zeros are dropped');
+  assert.throws(() => assertAllowlistMode('dev', 'alice'), /GITHUB_ALLOWED_LOGINS needs AUTH_MODE=github \(got "dev"\)/);
+  assert.throws(() => assertAllowlistMode('none', ','), /needs AUTH_MODE=github/);
+  assert.doesNotThrow(() => assertAllowlistMode('github', 'alice'));
+  assert.doesNotThrow(() => assertAllowlistMode('dev', ' '));
+  assert.doesNotThrow(() => assertAllowlistMode('dev', undefined));
+  await assert.rejects(allowedGithubIdsFromEnv(gitHubClient({ ...config, apiUrl: 'http://127.0.0.1:1' }), alice.login), /can't resolve .*unreachable/);
+  assert.deepEqual([await allowedGithubIdsFromEnv(gh, undefined), await allowedGithubIdsFromEnv(gh, ''), await allowedGithubIdsFromEnv(gh, '  ')], [[], [], []]);
 });
 
 test('GitHub sign-in never takes over a dev account; dev sessions and workers are refused in github mode; a renamed login moves aside', async () => {

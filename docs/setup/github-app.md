@@ -102,6 +102,15 @@ To sign in with GitHub instead of the dev login, start the API with `AUTH_MODE=g
 `AUTH_MODE=github node --env-file-if-exists=.env src/server.ts` in `services/api`). It uses the same client ID and no
 client secret.
 
+To restrict who can sign in, set `GITHUB_ALLOWED_LOGINS=alice,12345` (comma-separated; each entry is a GitHub login
+or a numeric user id). At start the API looks each login up on GitHub and pins it to that account's id, so a renamed
+account stays allowed and someone who later claims its old name doesn't. Unset or empty, anyone with a GitHub account can
+sign in. Other accounts get 403 at sign-in, and one taken off the list loses its sessions and workers on their next
+request. Lookups at start are unauthenticated (60 per hour per IP), so numeric ids are the safe choice in production
+or under restart loops. The list is read at start: restart the API to apply changes. It refuses to start if an entry can't be resolved
+(or the list names no one) rather than letting everyone in. Restricting by organization would need the App's Members
+permission, which it doesn't have.
+
 Team invites are emailed through [Resend](https://resend.com). With `AUTH_MODE=github` the API refuses to create
 invites (503) until both are set; with `AUTH_MODE=dev` and no mailer it logs the invite link instead:
 
