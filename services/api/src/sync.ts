@@ -333,7 +333,7 @@ export function startGitHubSync({ pool, gh, log }: { pool: pg.Pool; gh: GitHubCl
   };
 }
 
-/** One pass: file due issues, post due spec comments, reconcile dirty pull requests, prune old delivery ids. */
+/** One pass: file due issues, post due spec comments, sweep due repositories, reconcile dirty pull requests, prune old delivery ids. */
 export async function syncOnce(pool: pg.Pool, gh: GitHubClient) {
   // A queued issue whose board moved to another repository since approval is never filed.
   await pool.query(
@@ -344,6 +344,13 @@ export async function syncOnce(pool: pg.Pool, gh: GitHubClient) {
   );
   for (let job; (job = await claimIssue(pool)); ) await createIssue(pool, gh, job);
   for (let job; (job = await claimComment(pool)); ) await postComment(pool, gh, job);
+  // The repositories webhooks are processed for; a new one is due at once, so a restart after downtime sweeps it.
+  await pool.query(
+    `INSERT INTO github_repositories (repository_id, repository)
+     SELECT DISTINCT ON (repository_id) repository_id, repository FROM github_issues WHERE state = 'created'
+     ON CONFLICT DO NOTHING`,
+  );
+  for (let job; (job = await claimRepository(pool)); ) await sweep(pool, gh, job); // before the PRs, so what it marks is read this pass
   const seen: string[] = []; // each PR once per pass, so a PR that keeps getting bumped can't hold the loop
   for (let pr; (pr = await claimPullRequest(pool, seen)); seen.push(pr.id)) await reconcile(pool, gh, pr);
   await pool.query(`DELETE FROM github_deliveries WHERE received_at < now() - interval '30 days'`);
@@ -669,23 +676,107 @@ async function reconcile(pool: pg.Pool, gh: GitHubClient, pr: PrJob) {
   }
 }
 
+// ---- Reconciliation sweep: what changed while no webhook arrived (GitHub doesn't retry them) ----
+// It only records PRs and marks them dirty, and applies issue state; the dirty-PR pass reads the rest.
+
+const SWEEP_EVERY = `interval '10 minutes'`;
+// ponytail: at most 10 pages (1,000 items) per listing per sweep; in a busier window the older changes are lost (the sweep's
+// last_error says so). Page on past the cap within the lease if that ever shows up.
+const MAX_PAGES = 10;
+
+type RepoJob = { repository_id: string; repository: string; since: Date; started: Date };
+
+/**
+ * Leases one due repository that still has an issue on a card, in a statement of its own. `started` (now, before any
+ * GitHub call) becomes the next cursor on success; `since` is the last one less 2 minutes of clock skew, or on the first
+ * sweep its oldest tracked issue, at most a day back.
+ */
+async function claimRepository(pool: pg.Pool): Promise<RepoJob | undefined> {
+  const { rows } = await pool.query(
+    `UPDATE github_repositories r SET locked_until = ${LEASE}
+     WHERE repository_id = (
+       SELECT repository_id FROM github_repositories
+       WHERE next_sweep_at <= now() AND (locked_until IS NULL OR locked_until < now())
+         AND EXISTS (SELECT 1 FROM github_issues gi WHERE gi.repository_id = github_repositories.repository_id AND gi.state = 'created')
+       ORDER BY next_sweep_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+     RETURNING repository_id, repository, now() AS started, COALESCE(swept_until - interval '2 minutes',
+       GREATEST((SELECT min(created_at) FROM github_issues gi WHERE gi.repository_id = r.repository_id), now() - interval '1 day')) AS since`,
+  );
+  return rows[0];
+}
+
+/** Items of a listing sorted by updated_at, newest first, until one older than `since`; capped when MAX_PAGES ran out first. */
+async function changedSince<T extends { updated_at: string }>(gh: GitHubClient, repository: string, path: string, since: Date) {
+  const items: T[] = [];
+  for (let page = 1; ; page++) {
+    const listed = await gh.request<T[]>(repository, 'GET', `${path}&per_page=100&page=${page}`);
+    const fresh = listed.filter((i) => Date.parse(i.updated_at) >= since.getTime());
+    items.push(...fresh);
+    if (fresh.length < listed.length || listed.length < 100) return { items, capped: false };
+    if (page === MAX_PAGES) return { items, capped: true };
+  }
+}
+
+async function sweep(pool: pg.Pool, gh: GitHubClient, job: RepoJob) {
+  const { repository, repository_id: repositoryId, since } = job;
+  try {
+    const prs = await changedSince<RestPr>(gh, repository, `/repos/${repository}/pulls?state=all&sort=updated&direction=desc`, since);
+    // A statement per row: no lock order to keep. Only PRs newer than what we hold are marked dirty.
+    for (const pr of prs.items) await upsertPullRequest(pool, repositoryId, repository, pr, { onlyNewer: true });
+    // CI and reviews don't reliably move a PR's updated_at: every open PR on a card is read again.
+    await bump(pool, repositoryId, 'state = $2 AND id IN (SELECT pull_request_id FROM pull_request_tasks)', 'open');
+    // Deleted and transferred issues aren't listed in this repository any more; those stay webhook-only.
+    const issues = await changedSince<Issue>(
+      gh,
+      repository,
+      `/repos/${repository}/issues?state=all&sort=updated&direction=desc&since=${since.toISOString()}`,
+      since,
+    );
+    const { rows } = await pool.query(`SELECT number FROM github_issues WHERE repository_id = $1 AND state = 'created'`, [repositoryId]);
+    const tracked = new Set(rows.map((r) => r.number));
+    for (const i of issues.items) {
+      // Strictly newer only: a deleted or transferred event at the same instant keeps its note.
+      if (!i.pull_request && tracked.has(i.number)) await setIssueState(pool, repositoryId, i.number, i.state, null, i.updated_at, { strictlyNewer: true });
+    }
+    const capped = [prs.capped && 'pull requests', issues.capped && 'issues'].filter(Boolean);
+    // A straggling sweep from a lapsed lease never moves the cursor back.
+    await pool.query(
+      `UPDATE github_repositories SET swept_until = GREATEST(swept_until, $2), next_sweep_at = now() + ${SWEEP_EVERY}, locked_until = NULL,
+         last_error = $3 WHERE repository_id = $1`,
+      [repositoryId, job.started, capped.length ? `over ${MAX_PAGES * 100} ${capped.join(' and ')} changed since the last sweep; older changes were missed` : null],
+    );
+  } catch (err) {
+    const e = asGitHubError(err);
+    // The cursor stays: the next sweep lists from the same point. Retryable: keep the lease as the backoff.
+    await pool.query(
+      e.retryable
+        ? `UPDATE github_repositories SET locked_until = now() + make_interval(secs => $3), last_error = $2 WHERE repository_id = $1`
+        : `UPDATE github_repositories SET locked_until = NULL, next_sweep_at = now() + ${SWEEP_EVERY}, last_error = $2 WHERE repository_id = $1`,
+      e.retryable ? [repositoryId, e.message, backoff(1, e)] : [repositoryId, e.message],
+    );
+  }
+}
+
 // ---- Webhooks (their own listener, so the tunnel never reaches the API) ----
 
 type Check = { head_sha: string; pull_requests?: { number: number }[] };
+/** A PR as a webhook sends it (merged) or the REST list returns it (merged_at). */
+type RestPr = {
+  number: number;
+  title: string;
+  html_url: string;
+  user?: { login: string } | null;
+  state: string;
+  merged?: boolean;
+  merged_at?: string | null;
+  draft?: boolean;
+  head: { sha: string; ref: string };
+  updated_at: string;
+};
 type Payload = {
   action?: string;
   repository?: { id: number; full_name: string };
-  pull_request?: {
-    number: number;
-    title: string;
-    html_url: string;
-    user?: { login: string };
-    state: string;
-    merged?: boolean;
-    draft?: boolean;
-    head: { sha: string; ref: string };
-    updated_at: string;
-  };
+  pull_request?: RestPr;
   check_run?: Check;
   check_suite?: Check;
   sha?: string;
@@ -737,57 +828,77 @@ const ISSUE_EVENT: Record<string, [string, string | null]> = {
   transferred: ['closed', 'the issue was transferred to another repository'],
 };
 
+/**
+ * Records the PR as GitHub sent or listed it and marks it dirty (a new row starts dirty). `onlyNewer` (a listing) leaves
+ * a row alone unless the PR changed since what we hold.
+ */
+const upsertPullRequest = (db: Db, repositoryId: number | string, repository: string, pr: RestPr, { onlyNewer = false } = {}) =>
+  db.query(
+    `INSERT INTO pull_requests (repository_id, repository, number, title, url, author, state, draft, head_sha, head_ref, github_updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (repository_id, number) DO UPDATE SET title = EXCLUDED.title, url = EXCLUDED.url, author = EXCLUDED.author,
+       state = EXCLUDED.state, draft = EXCLUDED.draft, head_sha = EXCLUDED.head_sha, head_ref = EXCLUDED.head_ref,
+       github_updated_at = EXCLUDED.github_updated_at, dirty_seq = pull_requests.dirty_seq + 1` +
+      (onlyNewer ? ' WHERE pull_requests.github_updated_at IS NULL OR pull_requests.github_updated_at < EXCLUDED.github_updated_at' : ''),
+    [
+      repositoryId,
+      repository,
+      pr.number,
+      pr.title,
+      pr.html_url,
+      pr.user?.login ?? null,
+      pr.merged || pr.merged_at ? 'merged' : pr.state,
+      pr.draft ?? false,
+      pr.head.sha,
+      pr.head.ref,
+      pr.updated_at,
+    ],
+  );
+
+/** Marks the repository's PRs matching `where` ($2 = value) dirty. */
+const bump = (db: Db, repositoryId: number | string, where: string, value: unknown) =>
+  db.query(
+    // Rows locked in id order, so concurrent deliveries (and sweeps) touching the same PRs can't deadlock.
+    `UPDATE pull_requests SET dirty_seq = dirty_seq + 1
+     WHERE id IN (SELECT id FROM pull_requests WHERE repository_id = $1 AND ${where} ORDER BY id FOR UPDATE)`,
+    [repositoryId, value],
+  );
+
+/** Deliveries and sweeps can arrive out of order: an older state never overwrites a newer one. */
+const setIssueState = (
+  db: Db,
+  repositoryId: number | string,
+  number: number,
+  state: string,
+  note: string | null,
+  updatedAt: string,
+  { strictlyNewer = false } = {},
+) =>
+  db.query(
+    `UPDATE github_issues SET issue_state = $3, last_error = $4, issue_updated_at = $5, updated_at = now()
+     WHERE repository_id = $1 AND number = $2 AND (issue_updated_at IS NULL OR issue_updated_at ${strictlyNewer ? '<' : '<='} $5)`,
+    [repositoryId, number, state, note, updatedAt],
+  );
+
 /** Webhooks only record that something changed; reconcile reads the truth from GitHub. */
 async function handleEvent(c: pg.PoolClient, event: string, p: Payload) {
   const repositoryId = p.repository?.id;
   if (!repositoryId) return; // ping, installation*
   const { rowCount } = await c.query(`SELECT 1 FROM github_issues WHERE repository_id = $1 AND state = 'created' LIMIT 1`, [repositoryId]);
   if (!rowCount) return; // a repository we never filed an issue in
-  const bump = (where: string, value: unknown) =>
-    c.query(
-      // Rows locked in id order, so concurrent deliveries touching the same PRs can't deadlock.
-      `UPDATE pull_requests SET dirty_seq = dirty_seq + 1
-       WHERE id IN (SELECT id FROM pull_requests WHERE repository_id = $1 AND ${where} ORDER BY id FOR UPDATE)`,
-      [repositoryId, value],
-    );
 
   if (event === 'pull_request' && p.pull_request) {
-    const pr = p.pull_request;
-    await c.query(
-      `INSERT INTO pull_requests (repository_id, repository, number, title, url, author, state, draft, head_sha, head_ref, github_updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (repository_id, number) DO UPDATE SET title = EXCLUDED.title, url = EXCLUDED.url, author = EXCLUDED.author,
-         state = EXCLUDED.state, draft = EXCLUDED.draft, head_sha = EXCLUDED.head_sha, head_ref = EXCLUDED.head_ref,
-         github_updated_at = EXCLUDED.github_updated_at, dirty_seq = pull_requests.dirty_seq + 1`,
-      [
-        repositoryId,
-        p.repository!.full_name.toLowerCase(),
-        pr.number,
-        pr.title,
-        pr.html_url,
-        pr.user?.login ?? null,
-        pr.merged ? 'merged' : pr.state,
-        pr.draft ?? false,
-        pr.head.sha,
-        pr.head.ref,
-        pr.updated_at,
-      ],
-    );
+    await upsertPullRequest(c, repositoryId, p.repository!.full_name.toLowerCase(), p.pull_request);
   } else if (event === 'pull_request_review' && p.pull_request) {
-    await bump('number = $2', p.pull_request.number);
+    await bump(c, repositoryId, 'number = $2', p.pull_request.number);
   } else if (event === 'check_run' || event === 'check_suite') {
     const check = event === 'check_run' ? p.check_run : p.check_suite;
     const numbers = check?.pull_requests?.map((pr) => pr.number) ?? [];
-    await (numbers.length ? bump('number = ANY($2::int[])', numbers) : bump('head_sha = $2', check?.head_sha));
+    await (numbers.length ? bump(c, repositoryId, 'number = ANY($2::int[])', numbers) : bump(c, repositoryId, 'head_sha = $2', check?.head_sha));
   } else if (event === 'status') {
-    await bump('head_sha = $2', p.sha);
+    await bump(c, repositoryId, 'head_sha = $2', p.sha);
   } else if (event === 'issues' && p.issue && ISSUE_EVENT[p.action ?? '']) {
     const [state, note] = ISSUE_EVENT[p.action!];
-    // Deliveries can arrive out of order: an older event never overwrites a newer one.
-    await c.query(
-      `UPDATE github_issues SET issue_state = $3, last_error = $4, issue_updated_at = $5, updated_at = now()
-       WHERE repository_id = $1 AND number = $2 AND (issue_updated_at IS NULL OR issue_updated_at <= $5)`,
-      [repositoryId, p.issue.number, state, note, p.issue.updated_at],
-    );
+    await setIssueState(c, repositoryId, p.issue.number, state, note, p.issue.updated_at);
   }
 }

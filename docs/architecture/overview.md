@@ -165,8 +165,17 @@ decision, CI rollup, closing issue references) and relinks it, which makes out-o
 than the last one applied.
 A PR links to a task when it closes the task's issue in the same repository or its branch (not a fork's) starts with
 `<number>-`; plain mentions don't link. The app refreshes the task page every 15 s and the board every 30 s while issues are queued
-or open; SSE comes later. Deferred: recovering webhooks missed while the receiver was unreachable (Milestone 6
-reconciliation) and updating the issue when a later spec version is approved.
+or open; SSE comes later. Deferred: updating the issue when a later spec version is approved.
+
+Missed webhooks (Milestone 6): GitHub doesn't retry deliveries, so every 10 minutes, and at once after a restart, the
+loop sweeps each repository it has filed issues in. It lists the PRs and issues updated since the last good sweep
+(with two minutes of overlap), upserts or marks those PRs dirty, marks every open PR linked to a card dirty (CI and
+reviews don't always move a PR's update time), and applies issue open/closed with the same out-of-order guard as the
+webhook (only when strictly newer, so a listing can't undo a deletion). Only PRs that changed since we last saw them
+are marked dirty, and the first sweep looks back at most a day. The dirty-PR pass then reads each one as usual. A
+failed sweep doesn't advance its cursor; a listing stops at 1,000 items, and hitting that cap is recorded as the
+repository's last error (older changes in that window are lost). Deleted and
+transferred issues are still only learned from webhooks.
 
 As built (Milestone 6, round 1): sign-in with GitHub uses the app's Device Flow (no client secret). The API exchanges
 the device code for a user token, reads `GET /user` once (id, login, name) and drops the token; users are keyed by
@@ -178,8 +187,10 @@ app's installation token instead: `GET /repos/{repo}/collaborators/{login}/permi
 the transaction of: connecting a board to a repository (a repository without the app gets the same 403, so the answer doesn't reveal
 where the app is installed),
 listing and importing its issues, approving a spec, and retrying an issue or comment. `AUTH_MODE=dev` skips it.
-A user's own rate-limited token doesn't pause the app's GitHub traffic. Deferred: session token in the Keychain (it is in app preferences), a sign-in allowlist, the triage role, rate limits
-on the public sign-in routes.
+A user's own rate-limited token doesn't pause the app's GitHub traffic. Rate limits, in memory per process: 10 device codes and 30 token polls per minute per IP, and 30 repository checks
+per minute per user. Behind a proxy set `TRUST_PROXY` to the proxy's address (e.g. `127.0.0.1` for cloudflared on the
+same machine), so the client's IP is used and can't be forged; a hop count or `true` is refused. Deferred: session token in the
+Keychain (it is in app preferences), a sign-in allowlist, the triage role.
 
 ### Repository security
 

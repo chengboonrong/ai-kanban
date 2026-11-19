@@ -19,12 +19,15 @@ const SECRET = 'webhook-secret';
 
 // ---- Fake GitHub: just the endpoints the sync uses, per repository, with injectable failures ----
 
-type FakeIssue = { number: number; node_id: string; html_url: string; repository_url: string; state: 'open'; title: string; body: string;
+type FakeIssue = { number: number; node_id: string; html_url: string; repository_url: string; state: 'open' | 'closed'; title: string; body: string;
   created_at: string; updated_at: string; performed_via_github_app: { id: number } | null; user: { login: string }; pull_request?: object };
 type FakeComment = { id: number; issue: number; html_url: string; body: string; created_at: string; performed_via_github_app: null; user: { login: string } };
 /** An injected response for the next matching call: an error status, a dropped connection, or a hold until `wait` settles. */
 type Failure = { match: string; status?: number; headers?: Record<string, string>; drop?: boolean; wait?: Promise<void> };
-type FakeRepo = { id: number; issues: FakeIssue[]; comments: FakeComment[]; prs: Map<number, object>; failures: Failure[];
+/** A pull request as the REST list returns it (`prs` holds what GraphQL answers). */
+type FakePull = { number: number; title: string; html_url: string; user: { login: string }; state: 'open' | 'closed'; merged_at: string | null;
+  draft: boolean; head: { sha: string; ref: string }; updated_at: string };
+type FakeRepo = { id: number; issues: FakeIssue[]; comments: FakeComment[]; prs: Map<number, object>; pulls: FakePull[]; failures: Failure[];
   onGraphql?: (n: number) => Promise<void>; access?: Map<string, { permission: string; user: { id: number } }> };
 const repos = new Map<string, FakeRepo>();
 // Device Flow: each device code's answers to the token poll, in order (the last one repeats); the user each token belongs to.
@@ -100,9 +103,12 @@ const fake = createServer(async (req, res) => {
     return send(201, repo.issues.at(-1));
   }
   if (call === 'GET /issues') {
-    const sorted = [...repo.issues].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const since = url.searchParams.get('since') ?? '';
+    const key = url.searchParams.get('sort') === 'updated' ? 'updated_at' : 'created_at';
+    const sorted = repo.issues.filter((i) => i.updated_at >= since).sort((a, b) => b[key].localeCompare(a[key]));
     return send(200, pageOf(sorted, url));
   }
+  if (call === 'GET /pulls') return send(200, pageOf([...repo.pulls].sort((a, b) => b.updated_at.localeCompare(a.updated_at)), url));
   const n = /^\w+ \/issues\/(\d+)/.exec(call)?.[1];
   const issue = repo.issues.find((i) => `${i.number}` === n);
   if (/^GET \/issues\/\d+$/.test(call)) return issue ? send(200, issue) : send(404, { message: 'Not Found' });
@@ -172,7 +178,7 @@ async function fixture({ installed = true, api = undefined as Api | undefined } 
   const board = (await api('POST', `/workspaces/${ws.id}/boards`, { name: 'Roadmap' })).json();
   await api('PATCH', `/boards/${board.id}`, { repository });
   const worker = as((await pairWorker(api, 'Mac')).token);
-  const repo: FakeRepo = { id: randomInt(1, 2 ** 47), issues: [], comments: [], prs: new Map(), failures: [] };
+  const repo: FakeRepo = { id: randomInt(1, 2 ** 47), issues: [], comments: [], prs: new Map(), pulls: [], failures: [] };
   if (installed) repos.set(repository, repo);
   return { api, board, repository, worker, repo };
 }
@@ -451,11 +457,11 @@ test('webhooks: a duplicate delivery is processed once, a failing one rolls back
   assert.equal(await pr(stranger, 7), undefined);
 
   const issue = (action: string, updated_at: string) => ({ action, repository: { id: f.repo.id, full_name: f.repository }, issue: { number: 1, updated_at } });
-  await deliver('issues', issue('closed', '2026-11-02T00:00:00Z'));
+  await deliver('issues', issue('closed', '2099-11-02T00:00:00Z'));
   assert.equal((await card(f.api, f.board.id, task.id)).issue.state, 'closed');
-  await deliver('issues', issue('reopened', '2026-11-01T00:00:00Z'));
+  await deliver('issues', issue('reopened', '2099-11-01T00:00:00Z'));
   assert.equal((await card(f.api, f.board.id, task.id)).issue.state, 'closed', 'an older event arriving late is ignored');
-  await deliver('issues', issue('reopened', '2026-11-03T00:00:00Z'));
+  await deliver('issues', issue('reopened', '2099-11-03T00:00:00Z'));
   assert.equal((await card(f.api, f.board.id, task.id)).issue.state, 'open');
 });
 
@@ -731,15 +737,124 @@ test('a pull request that closes an imported issue links to its card', async () 
   assert.equal((await card(f.api, f.board.id, task.id)).prs, 1);
 });
 
+// ---- Reconciliation sweep (webhooks missed) ----
+
+const sweepRow = async (f: Fixture) => (await pool.query('SELECT * FROM github_repositories WHERE repository_id = $1', [f.repo.id])).rows[0];
+const sweepDue = (f: Fixture) => pool.query('UPDATE github_repositories SET next_sweep_at = now(), locked_until = NULL WHERE repository_id = $1', [f.repo.id]);
+const pull = (f: Fixture, number: number, updatedAt = new Date().toISOString()): FakePull => ({
+  number, title: `PR ${number}`, html_url: `https://github.com/${f.repository}/pull/${number}`, user: { login: 'octocat' }, state: 'open',
+  merged_at: null, draft: false, head: { sha: `sha${number}`, ref: 'feature' }, updated_at: updatedAt,
+});
+const gqlPr = (f: Fixture, n: number, ci: string) => ({
+  title: `PR ${n}`, url: `https://github.com/${f.repository}/pull/${n}`, state: 'OPEN', isDraft: false, headRefName: 'feature', headRefOid: `sha${n}`,
+  updatedAt: '2026-11-01T00:00:00Z', reviewDecision: null, author: { login: 'octocat' },
+  commits: { nodes: [{ commit: { statusCheckRollup: { state: ci } } }] }, closingIssuesReferences: { nodes: [{ number: 1, repository: { databaseId: f.repo.id } }] },
+});
+
+test('a sweep finds what webhooks missed: a new PR, CI on a linked PR, a closed issue; an older listing loses to a newer event', async () => {
+  const f = await fixture();
+  const task = await approved(f);
+  await syncOnce(pool, gh); // files #1; its repository is swept at once (nothing yet)
+  assert.ok((await sweepRow(f)).swept_until, 'swept');
+
+  // While the receiver is down: PR 7 (closing #1) is opened with CI passing, and #1 is closed.
+  f.repo.pulls.push(pull(f, 7));
+  f.repo.prs.set(7, gqlPr(f, 7, 'SUCCESS'));
+  Object.assign(f.repo.issues[0], { state: 'closed', updated_at: new Date().toISOString() });
+  await syncOnce(pool, gh);
+  assert.equal(await pr(f, 7), undefined, 'not due yet');
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  const seven = await pr(f, 7);
+  assert.equal(seven.dirty_seq, seven.synced_seq, 'reconciled in the same pass');
+  assert.deepEqual(await card(f.api, f.board.id, task.id), {
+    issue: { number: 1, url: `https://github.com/${f.repository}/issues/1`, state: 'closed' }, prs: 1, review: 'none', ci: 'success',
+  });
+
+  // CI fails without moving the PR's updated_at (the listing shows nothing new): the linked open PR is read again anyway.
+  f.repo.pulls.length = 0;
+  f.repo.prs.set(7, gqlPr(f, 7, 'FAILURE'));
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  assert.equal((await card(f.api, f.board.id, task.id)).ci, 'failure');
+
+  // A reopen event newer than what the listing shows wins.
+  await deliver('issues', { action: 'reopened', repository: { id: f.repo.id, full_name: f.repository }, issue: { number: 1, updated_at: '2099-01-01T00:00:00Z' } });
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  assert.equal((await card(f.api, f.board.id, task.id)).issue.state, 'open');
+
+  // Deleted at T; a listing still showing it open at that same T doesn't undo it.
+  const at = '2099-06-01T00:00:00.000Z';
+  await deliver('issues', { action: 'deleted', repository: { id: f.repo.id, full_name: f.repository }, issue: { number: 1, updated_at: at } });
+  Object.assign(f.repo.issues[0], { state: 'open', updated_at: at });
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  assert.deepEqual([(await row(task.id)).issue_state, (await row(task.id)).last_error], ['closed', 'the issue was deleted on GitHub']);
+});
+
+test("a failed sweep keeps its cursor; a concurrent pass doesn't sweep the same repository; paging stops at the cursor", async () => {
+  const f = await fixture();
+  opened(f);
+  await imported(f);
+  const pullCalls = () => calls.filter((c) => c === `GET /repos/${f.repository}/pulls`).length;
+
+  f.repo.failures.push({ match: 'GET /pulls', status: 500 });
+  await syncOnce(pool, gh);
+  const retrying = await sweepRow(f);
+  assert.equal(retrying.swept_until, null);
+  assert.match(retrying.last_error, /500/);
+  assert.ok(retrying.locked_until > new Date(), 'backing off');
+
+  await sweepDue(f);
+  f.repo.failures.push({ match: 'GET /pulls', status: 404 });
+  await syncOnce(pool, gh);
+  const given = await sweepRow(f);
+  assert.equal(given.swept_until, null);
+  assert.equal(given.locked_until, null);
+  assert.ok(given.next_sweep_at > new Date(Date.now() + 9 * 60_000), 'tried again in 10 minutes');
+
+  await sweepDue(f);
+  let release!: () => void;
+  f.repo.failures.push({ match: 'GET /pulls', wait: new Promise<void>((resolve) => (release = resolve)) });
+  const before = pullCalls();
+  const first = syncOnce(pool, gh);
+  while (pullCalls() === before) await sleep(10);
+  await syncOnce(pool, gh);
+  release();
+  await first;
+  assert.equal(pullCalls(), before + 1, 'swept once');
+  const swept = await sweepRow(f);
+  assert.ok(swept.swept_until);
+  assert.equal(swept.last_error, null);
+
+  // 120 PRs changed since the cursor, 130 before it: two pages read, not three.
+  const old = new Date(Date.now() - 86_400_000).toISOString();
+  for (let n = 1; n <= 250; n++) f.repo.pulls.push(pull(f, n, n <= 120 ? new Date().toISOString() : old));
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  assert.equal(pullCalls(), before + 3);
+  const counts = async () =>
+    (await pool.query('SELECT count(*)::int AS n, max(dirty_seq)::int AS dirty FROM pull_requests WHERE repository_id = $1', [f.repo.id])).rows[0];
+  assert.deepEqual(await counts(), { n: 120, dirty: 1 });
+
+  // Listed again unchanged (inside the overlap): nothing is marked dirty again.
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  assert.deepEqual(await counts(), { n: 120, dirty: 1 });
+});
+
 // ---- Signing in with GitHub (AUTH_MODE=github) ----
 
 const ghUser = (login: string, name: string | null = null) => ({ id: randomInt(1, 2 ** 47), login, name });
+/** Each sign-in from an address of its own, so they don't add up to the per-IP limit. */
 const device = async () => {
-  const res = await ghApp.inject({ method: 'POST', url: '/auth/github/device' });
+  const res = await ghApp.inject({ method: 'POST', url: '/auth/github/device', remoteAddress: `10.0.${randomInt(256)}.${randomInt(256)}` });
   assert.equal(res.statusCode, 200, res.body);
   return res.json().deviceCode as string;
 };
-const poll = (deviceCode: string) => ghApp.inject({ method: 'POST', url: '/auth/github/token', payload: { deviceCode } });
+const poll = (deviceCode: string) =>
+  ghApp.inject({ method: 'POST', url: '/auth/github/token', payload: { deviceCode }, remoteAddress: `10.0.${randomInt(256)}.${randomInt(256)}` });
 /** Signs in on ghApp as GitHub user `me`; returns the API's answer. */
 async function signIn(me: { id: number; login: string; name: string | null }) {
   const code = await device();
@@ -868,4 +983,43 @@ test('github mode: repository actions need write access on GitHub and the app in
   f.repo.access.clear();
   assert.equal((await g('PATCH', `/boards/${f.board.id}`, { repository: null })).statusCode, 200, 'disconnecting needs no access');
   assert.equal((await f.api('PATCH', `/boards/${f.board.id}`, { repository: f.repository })).statusCode, 200, 'dev mode: no check');
+});
+
+test('rate limits: device codes per IP, repository checks per user', async () => {
+  const fromIp = (remoteAddress: string) => ghApp.inject({ method: 'POST', url: '/auth/github/device', remoteAddress });
+  for (let i = 0; i < 10; i++) assert.equal((await fromIp('10.1.1.1')).statusCode, 200);
+  const limited = await fromIp('10.1.1.1');
+  assert.equal(limited.statusCode, 429);
+  assert.ok(Number(limited.headers['retry-after']) > 0, 'retry-after');
+  assert.match(limited.json().message, /^Too many requests; try again in \d+ s$/);
+  assert.equal((await fromIp('10.1.1.2')).statusCode, 200, 'another address');
+
+  const gated = async () => {
+    const me = ghUser(`gh-${randomUUID().slice(0, 8)}`);
+    const { token } = await signIn(me);
+    const f = await fixture({ api: as(token) });
+    f.repo.access = new Map([[me.login, { permission: 'write', user: { id: me.id } }]]);
+    return () => as(token, ghApp)('GET', `/boards/${f.board.id}/github/issues`);
+  };
+  const [busy, other] = [await gated(), await gated()];
+  for (let i = 0; i < 30; i++) assert.equal((await busy()).statusCode, 200);
+  const before = calls.length;
+  const res = await busy();
+  assert.deepEqual([res.statusCode, Number(res.headers['retry-after']) > 0], [429, true]);
+  assert.equal(calls.length, before, 'refused before any GitHub call');
+  assert.equal((await other()).statusCode, 200, 'another user');
+});
+
+test('TRUST_PROXY names the proxy: a client-supplied X-Forwarded-For entry does not escape the per-IP limit; a hop count is refused', async () => {
+  process.env.TRUST_PROXY = '1';
+  await assert.rejects(buildApp({ pool, authMode: 'github', github: gh }), /not a hop count/);
+  process.env.TRUST_PROXY = '127.0.0.1';
+  const proxied = await buildApp({ pool, authMode: 'github', github: gh });
+  delete process.env.TRUST_PROXY;
+  const fromProxy = (forwarded: string) =>
+    proxied.inject({ method: 'POST', url: '/auth/github/device', remoteAddress: '127.0.0.1', headers: { 'x-forwarded-for': forwarded } });
+  for (let i = 0; i < 10; i++) assert.equal((await fromProxy(`198.51.100.${i}, 10.3.3.3`)).statusCode, 200);
+  assert.equal((await fromProxy('198.51.100.99, 10.3.3.3')).statusCode, 429, 'the proxy-added entry is the key');
+  assert.equal((await fromProxy('10.3.3.3, 10.3.3.4')).statusCode, 200, 'another client');
+  await proxied.close();
 });
