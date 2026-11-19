@@ -94,8 +94,9 @@ client secret.
 
 ## 6. When the tunnel URL changes
 
-App settings → **General** → **Webhook URL** → paste the new URL with `/github/webhook` → **Save changes**. Deliveries
-GitHub couldn't send in the meantime can be redelivered from **Advanced → Recent Deliveries**.
+App settings → **General** → **Webhook URL** → paste the new URL with `/github/webhook` → **Save changes**. Changes
+GitHub couldn't deliver in the meantime are picked up by the API's 10-minute sweep (or redeliver them from
+**Advanced → Recent Deliveries** to see them at once).
 
 ## Security
 
