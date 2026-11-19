@@ -30,9 +30,9 @@ const masked = (email: string) => `${email[0]}***${email.slice(email.indexOf('@'
 export function registerInviteRoutes(app: FastifyInstance, pool: pg.Pool, { authMode, mailer }: { authMode: string; mailer?: Mailer }) {
   const appUrl = (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
   // Invite emails go to addresses the inviter types: limited per workspace and per inviter, so the API can't spam.
-  const perWorkspace = rateLimit(20, HOUR);
-  const perInviter = rateLimit(20, HOUR);
-  const acceptLimit = rateLimit(30);
+  const perWorkspace = rateLimit(pool, 'invite-workspace', 20, HOUR);
+  const perInviter = rateLimit(pool, 'invite-inviter', 20, HOUR);
+  const acceptLimit = rateLimit(pool, 'invite-accept', 30);
 
   /** Owners and admins manage invites; members get 403, non-members 404. */
   async function requireAdmin(req: FastifyRequest) {
@@ -63,9 +63,9 @@ export function registerInviteRoutes(app: FastifyInstance, pool: pg.Pool, { auth
   }
 
   const newToken = () => randomBytes(32).toString('base64url');
-  const limitSends = (req: FastifyRequest) => {
-    perWorkspace((req.params as Ws).id);
-    perInviter(req.userId);
+  const limitSends = async (req: FastifyRequest) => {
+    await perWorkspace((req.params as Ws).id);
+    await perInviter(req.userId);
   };
 
   // ---- Members ----
@@ -132,7 +132,7 @@ export function registerInviteRoutes(app: FastifyInstance, pool: pg.Pool, { auth
         [id, email],
       );
       if (member.rowCount) throw httpError(409, 'Someone with this address is already a member');
-      limitSends(req); // before storing anything: past the limit the address isn't kept either
+      await limitSends(req); // before storing anything: past the limit the address isn't kept either
       const token = newToken();
       // A pending invite for the address is resent: a new token voids the old link. One statement, so two at once can't both insert.
       const { rows: [{ created, workspace, ...invite }] } = await pool.query(
@@ -154,18 +154,20 @@ export function registerInviteRoutes(app: FastifyInstance, pool: pg.Pool, { auth
     await requireAdmin(req);
     if (noMail(reply)) return reply;
     const token = newToken();
-    // Limited only once the invite is known pending; a 429 rolls the new token back, so the old link keeps working.
-    const { workspace, ...invite } = await tx(pool, async (c) => {
-      const { rows: [row] } = await c.query(
-        `UPDATE workspace_invites i SET token_hash = $3, invited_by = $4, expires_at = now() + interval '7 days'
-         WHERE i.id = $1 AND i.workspace_id = $2 AND ${PENDING}
-         RETURNING ${INVITE}, (SELECT name FROM workspaces WHERE id = i.workspace_id) AS workspace`,
-        [inviteId, id, sha256(token), req.userId],
-      );
-      if (!row) throw httpError(404, 'invite not found');
-      limitSends(req);
-      return row;
-    });
+    // Limited only once the invite is known pending, and before the new token is stored, so a 429 leaves the old link working.
+    // Not inside a transaction: the limit is its own statement on the shared table, and a connection held while waiting
+    // for a second one could starve the pool.
+    const pending = await pool.query(`SELECT 1 FROM workspace_invites i WHERE i.id = $1 AND i.workspace_id = $2 AND ${PENDING}`, [inviteId, id]);
+    if (!pending.rowCount) throw httpError(404, 'invite not found');
+    await limitSends(req);
+    const { rows: [row] } = await pool.query(
+      `UPDATE workspace_invites i SET token_hash = $3, invited_by = $4, expires_at = now() + interval '7 days'
+       WHERE i.id = $1 AND i.workspace_id = $2 AND ${PENDING}
+       RETURNING ${INVITE}, (SELECT name FROM workspaces WHERE id = i.workspace_id) AS workspace`,
+      [inviteId, id, sha256(token), req.userId],
+    );
+    if (!row) throw httpError(404, 'invite not found');
+    const { workspace, ...invite } = row;
     if (await deliver(req, reply, { email: invite.email, workspace }, token)) return reply;
     return invite;
   });
@@ -187,7 +189,7 @@ export function registerInviteRoutes(app: FastifyInstance, pool: pg.Pool, { auth
     '/invites/accept',
     { schema: { body: object({ token: { type: 'string', minLength: 1, maxLength: 100 } }) } },
     async (req) => {
-      acceptLimit(req.userId);
+      await acceptLimit(req.userId);
       const gone = httpError(404, 'This invite expired or was already used');
       return tx(pool, async (c) => {
         // The row lock serialises accepts of one token (and a revoke): the second sees the first one's result.

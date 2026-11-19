@@ -122,10 +122,10 @@ export async function buildApp({ pool, authMode, logger = false, github, mailer 
     req.userId = rows[0].user_id;
   });
 
-  const writeLimit = rateLimit(30); // each check is a GitHub call or two, on the installation's rate limit
+  const writeLimit = rateLimit(pool, 'write', 30); // each check is a GitHub call or two, on the installation's rate limit
   app.decorate('requireWrite', async (userId: string, repository: string) => {
     if (authMode !== 'github') return;
-    writeLimit(userId);
+    await writeLimit(userId);
     await requireWriteAccess(pool, github!, userId, repository);
   });
 
@@ -165,10 +165,10 @@ export async function buildApp({ pool, authMode, logger = false, github, mailer 
 
   if (authMode === 'github') {
     const gh = github!;
-    const deviceLimit = rateLimit(10);
-    const tokenLimit = rateLimit(30); // a client polls every 5 s or slower
+    const deviceLimit = rateLimit(pool, 'device', 10);
+    const tokenLimit = rateLimit(pool, 'token', 30); // a client polls every 5 s or slower
     app.post('/auth/github/device', { config: { public: true } }, async (req) => {
-      deviceLimit(req.ip);
+      await deviceLimit(req.ip);
       const d = await gh.deviceCode();
       if (!d.device_code) throw new GitHubError(502, `GitHub refused the sign-in: ${d.error ?? 'no device code'}`, false);
       return { deviceCode: d.device_code, userCode: d.user_code, verificationUri: d.verification_uri, interval: d.interval, expiresIn: d.expires_in };
@@ -181,7 +181,7 @@ export async function buildApp({ pool, authMode, logger = false, github, mailer 
         schema: { body: { type: 'object', required: ['deviceCode'], properties: { deviceCode: { type: 'string', minLength: 1, maxLength: 200 } } } },
       },
       async (req, reply) => {
-        tokenLimit(req.ip);
+        await tokenLimit(req.ip);
         const t = await gh.deviceToken((req.body as { deviceCode: string }).deviceCode);
         if (t.error === 'authorization_pending' || t.error === 'slow_down') {
           // GitHub names the (raised) interval on slow_down only; 5 s is its minimum.
