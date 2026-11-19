@@ -175,7 +175,12 @@ webhook (only when strictly newer, so a listing can't undo a deletion). Only PRs
 are marked dirty, and the first sweep looks back at most a day. The dirty-PR pass then reads each one as usual. A
 failed sweep doesn't advance its cursor; a listing stops at 1,000 items, and hitting that cap is recorded as the
 repository's last error (older changes in that window are lost). Deleted and
-transferred issues are still only learned from webhooks.
+transferred issues no longer appear in the listing, so each sweep also reads up to 10 of the repository's tracked
+issues directly, skipping any filed or updated in the last five minutes (`GET /repos/{r}/issues/{n}`, least recently checked first,
+stamped in `github_issues.checked_at` before the read). A redirect to another repository marks it transferred, a 410
+deleted, and a 404 "deleted or moved to a repository the app can't read"; a 404 or 410 counts only once
+`GET /repos/{r}` reads fine, has the same id and has issues enabled, so losing access never marks anything. Any other
+failure fails the sweep (issues marked before it stay marked).
 
 As built (Milestone 6, round 1): sign-in with GitHub uses the app's Device Flow (no client secret). The API exchanges
 the device code for a user token, reads `GET /user` once (id, login, name) and drops the token; users are keyed by
