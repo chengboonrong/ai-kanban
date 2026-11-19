@@ -243,13 +243,10 @@ Widget _icon(
       interactive: false,
       controller: c,
     ),
-    Glyph.members => CircleUserIcon(
-      size: size,
-      color: color,
-      strokeWidth: stroke,
-      animationDuration: d,
-      interactive: false,
-      controller: c,
+    // not_static_icons has no two-person glyph; Lucide's "users" is drawn here instead.
+    Glyph.members => CustomPaint(
+      size: Size.square(size),
+      painter: _UsersPainter(color, stroke),
     ),
     Glyph.workerOff => CircleDotIcon(
       size: size,
@@ -498,6 +495,49 @@ class _ArcPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ArcPainter old) => old.color != color;
+}
+
+/// Lucide "users" (ISC) on its 24 grid: a person in front, a second one's shoulder and head behind.
+class _UsersPainter extends CustomPainter {
+  _UsersPainter(this.color, this.stroke);
+  final Color color;
+  final double stroke;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.width / 24;
+    Offset at(double x, double y) => Offset(x * s, y * s);
+    final r = Radius.circular(4 * s);
+    final p = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    // M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2
+    final front = Path()
+      ..moveTo(16 * s, 21 * s)
+      ..lineTo(16 * s, 19 * s)
+      ..arcToPoint(at(12, 15), radius: r, clockwise: false)
+      ..lineTo(6 * s, 15 * s)
+      ..arcToPoint(at(2, 19), radius: r, clockwise: false)
+      ..lineTo(2 * s, 21 * s);
+    // M22 21v-2a4 4 0 0 0-3-3.87 and M16 3.13a4 4 0 0 1 0 7.75
+    final back = Path()
+      ..moveTo(22 * s, 21 * s)
+      ..lineTo(22 * s, 19 * s)
+      ..arcToPoint(at(19, 15.13), radius: r, clockwise: false)
+      ..moveTo(16 * s, 3.13 * s)
+      ..arcToPoint(at(16, 10.88), radius: r);
+    canvas
+      ..drawPath(front, p)
+      ..drawPath(back, p)
+      ..drawCircle(at(9, 7), 4 * s, p);
+  }
+
+  @override
+  bool shouldRepaint(_UsersPainter old) =>
+      old.color != color || old.stroke != stroke;
 }
 
 /// A round synth key: a coloured disc carrying one glyph. State lives in the key's colour.

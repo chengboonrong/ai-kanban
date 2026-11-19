@@ -235,11 +235,22 @@ class HomePage extends ConsumerWidget {
                 ),
             ],
             const SizedBox(height: 32),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                onPressed: join,
-                child: const Text('Join with invite link…'),
+            // Shifted by the theme's button padding so the label lines up with the workspace names above.
+            Transform.translate(
+              offset: Offset(
+                -(theme.textButtonTheme.style?.padding
+                            ?.resolve({})
+                            ?.horizontal ??
+                        0) /
+                    2,
+                0,
+              ),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: join,
+                  child: const Text('Join with invite link…'),
+                ),
               ),
             ),
           ],
