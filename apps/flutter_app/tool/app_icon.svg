@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 696 546">
+  <!-- The app mark: keycaps stacked 3/2/1 as kanban columns; the orange key is the one that is live.
+       Each key is a lip (offset 16 down) under a face. tool/app_icon.sh renders every platform icon from this. -->
+  <g fill="#000000">
+    <rect x="0" y="16" width="200" height="150" rx="30"/>
+    <rect x="0" y="206" width="200" height="150" rx="30"/>
+    <rect x="0" y="396" width="200" height="150" rx="30"/>
+    <rect x="248" y="206" width="200" height="150" rx="30"/>
+    <rect x="496" y="16" width="200" height="150" rx="30"/>
+  </g>
+  <g fill="#1C1C1E">
+    <rect x="0" y="0" width="200" height="150" rx="30"/>
+    <rect x="0" y="190" width="200" height="150" rx="30"/>
+    <rect x="0" y="380" width="200" height="150" rx="30"/>
+    <rect x="248" y="190" width="200" height="150" rx="30"/>
+    <rect x="496" y="0" width="200" height="150" rx="30"/>
+  </g>
+  <rect x="248" y="16" width="200" height="150" rx="30" fill="#C2400F"/>
+  <rect x="248" y="0" width="200" height="150" rx="30" fill="#FF5A1F"/>
+</svg>
