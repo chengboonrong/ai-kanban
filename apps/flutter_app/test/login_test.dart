@@ -9,6 +9,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'fake_secure.dart';
+
 class FakeAuthApi extends Api {
   FakeAuthApi(this.mode) : super(Dio());
   final String mode;
@@ -55,9 +57,11 @@ class FakeAuthApi extends Api {
 
 Future<ProviderContainer> pump(WidgetTester tester, FakeAuthApi api) async {
   SharedPreferences.setMockInitialValues({});
+  final prefs = await SharedPreferences.getInstance();
   final container = ProviderContainer(
     overrides: [
-      prefsProvider.overrideWithValue(await SharedPreferences.getInstance()),
+      prefsProvider.overrideWithValue(prefs),
+      sessionStoreProvider.overrideWithValue(SessionStore(prefs, FakeSecure())),
       authApiProvider.overrideWithValue(api),
     ],
   );

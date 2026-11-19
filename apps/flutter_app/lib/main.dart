@@ -5,14 +5,21 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
 import 'core/user_store.dart';
+import 'features/auth/auth.dart';
 import 'features/tasks/outbox.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
+  final sessions = SessionStore(prefs, secureStorage);
+  final session = await sessions.load();
   runApp(
     ProviderScope(
-      overrides: [prefsProvider.overrideWithValue(prefs)],
+      overrides: [
+        prefsProvider.overrideWithValue(prefs),
+        sessionStoreProvider.overrideWithValue(sessions),
+        initialSessionProvider.overrideWithValue(session),
+      ],
       child: const App(),
     ),
   );

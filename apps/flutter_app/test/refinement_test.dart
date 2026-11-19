@@ -1,18 +1,21 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
 
 import 'package:ai_kanban/core/api.dart';
 import 'package:ai_kanban/core/models.dart';
 import 'package:ai_kanban/core/user_store.dart';
 import 'package:ai_kanban/features/agents/refinement.dart';
+import 'package:ai_kanban/features/auth/auth.dart';
 import 'package:ai_kanban/features/boards/board_page.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'fake_secure.dart';
 
 /// Serves [answers] in turn (the last one from then on) and counts the calls. The run's live events never arrive
 /// unless [events] is set, which is answered once.
@@ -70,14 +73,16 @@ class _FakeApi extends Api {
 
 /// Signed in as [login]; ann connected the board's repository.
 Future<SharedPreferences> _signedIn(String login) async {
-  SharedPreferences.setMockInitialValues({
-    'session': jsonEncode({
-      'token': 'x',
-      'user': {'id': 'u-$login', 'login': login, 'displayName': login},
-    }),
-  });
+  SharedPreferences.setMockInitialValues({});
   return SharedPreferences.getInstance();
 }
+
+Override _session(String login) => initialSessionProvider.overrideWithValue(
+  Session.fromJson({
+    'token': 'x',
+    'user': {'id': 'u-$login', 'login': login, 'displayName': login},
+  }),
+);
 
 Map<String, dynamic> _run(
   String state, {
@@ -135,6 +140,10 @@ Future<void> _pumpPanel(
     ProviderScope(
       overrides: [
         prefsProvider.overrideWithValue(prefs),
+        sessionStoreProvider.overrideWithValue(
+          SessionStore(prefs, FakeSecure()),
+        ),
+        _session(viewer),
         apiProvider.overrideWithValue(api),
       ],
       child: MaterialApp.router(
@@ -174,6 +183,10 @@ Future<void> _pumpBoard(
     ProviderScope(
       overrides: [
         prefsProvider.overrideWithValue(prefs),
+        sessionStoreProvider.overrideWithValue(
+          SessionStore(prefs, FakeSecure()),
+        ),
+        _session(viewer),
         apiProvider.overrideWithValue(api),
       ],
       child: const MaterialApp(home: BoardPage(boardId: 'b')),

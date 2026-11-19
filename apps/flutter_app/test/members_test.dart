@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:ai_kanban/core/api.dart';
 import 'package:ai_kanban/core/models.dart';
@@ -15,6 +14,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'fake_secure.dart';
 
 /// Workspace 'w' holds board 'b'; the viewer (ann, u1) has [role] in it.
 class _FakeApi extends Api {
@@ -112,14 +113,16 @@ Map<String, dynamic> _member(String id, String login, String role) => {
 };
 
 Future<SharedPreferences> _signedIn() async {
-  SharedPreferences.setMockInitialValues({
-    'session': jsonEncode({
-      'token': 't',
-      'user': {'id': 'u1', 'login': 'ann', 'displayName': 'ann'},
-    }),
-  });
+  SharedPreferences.setMockInitialValues({});
   return SharedPreferences.getInstance();
 }
+
+final _ann = initialSessionProvider.overrideWithValue(
+  Session.fromJson({
+    'token': 't',
+    'user': {'id': 'u1', 'login': 'ann', 'displayName': 'ann'},
+  }),
+);
 
 Future<void> _pumpMembers(WidgetTester tester, _FakeApi api) async {
   final prefs = await _signedIn();
@@ -127,6 +130,10 @@ Future<void> _pumpMembers(WidgetTester tester, _FakeApi api) async {
     ProviderScope(
       overrides: [
         prefsProvider.overrideWithValue(prefs),
+        sessionStoreProvider.overrideWithValue(
+          SessionStore(prefs, FakeSecure()),
+        ),
+        _ann,
         apiProvider.overrideWithValue(api),
       ],
       child: MaterialApp(
@@ -145,6 +152,10 @@ Future<void> _pumpInvite(WidgetTester tester, _FakeApi api) async {
     ProviderScope(
       overrides: [
         prefsProvider.overrideWithValue(prefs),
+        sessionStoreProvider.overrideWithValue(
+          SessionStore(prefs, FakeSecure()),
+        ),
+        _ann,
         apiProvider.overrideWithValue(api),
       ],
       child: MaterialApp.router(
@@ -293,9 +304,14 @@ void main() {
             }
             return Completer<String>().future; // stays on the invite page
           };
+        final prefs = await _signedIn();
         final container = ProviderContainer(
           overrides: [
-            prefsProvider.overrideWithValue(await _signedIn()),
+            prefsProvider.overrideWithValue(prefs),
+            sessionStoreProvider.overrideWithValue(
+              SessionStore(prefs, FakeSecure()),
+            ),
+            _ann,
             apiProvider.overrideWithValue(api),
             authApiProvider.overrideWithValue(api),
           ],
