@@ -87,21 +87,23 @@ async function move(
   return position;
 }
 
+// A card's AI state (t is the task): an active run wins, then the latest spec's approval, then the last run's outcome.
+const REFINEMENT_JOINS = `
+  LEFT JOIN LATERAL (SELECT state FROM agent_runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1) r ON true
+  LEFT JOIN LATERAL (SELECT version, approved_at FROM specs WHERE task_id = t.id ORDER BY version DESC LIMIT 1) s ON true`;
+const REFINEMENT = `CASE WHEN r.state IN ('queued', 'running') THEN r.state
+  WHEN s.approved_at IS NOT NULL THEN 'approved'
+  WHEN r.state = 'failed' THEN 'failed'
+  WHEN s.version IS NOT NULL THEN 'ready' END`;
+
 async function loadBoard(db: Db, boardId: string) {
   const { rows: [board] } = await db.query(`SELECT ${BOARD} FROM boards WHERE id = $1`, [boardId]);
   const { rows: columns } = await db.query(`SELECT ${COLUMN} FROM columns WHERE board_id = $1 ORDER BY position`, [boardId]);
-  // refinement: the card's AI state — an active run wins, then the latest spec's approval, then the last run's outcome.
   // github: the issue, how many PRs link to it, and for open ones the newest PR's review and the worst CI result.
   const { rows: tasks } = await db.query(
-    `SELECT ${TASK},
-       CASE WHEN r.state IN ('queued', 'running') THEN r.state
-            WHEN s.approved_at IS NOT NULL THEN 'approved'
-            WHEN r.state = 'failed' THEN 'failed'
-            WHEN s.version IS NOT NULL THEN 'ready' END AS refinement,
+    `SELECT ${TASK}, ${REFINEMENT} AS refinement,
        CASE WHEN g.issue IS NOT NULL THEN json_build_object('issue', g.issue, 'prs', p.n, 'review', p.review, 'ci', p.ci) END AS github
-     FROM tasks t
-     LEFT JOIN LATERAL (SELECT state FROM agent_runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1) r ON true
-     LEFT JOIN LATERAL (SELECT version, approved_at FROM specs WHERE task_id = t.id ORDER BY version DESC LIMIT 1) s ON true
+     FROM tasks t ${REFINEMENT_JOINS}
      LEFT JOIN LATERAL (SELECT ${ISSUE_JSON} AS issue FROM github_issues gi WHERE gi.task_id = t.id) g ON true
      LEFT JOIN LATERAL (
        SELECT count(*)::int AS n,
@@ -180,7 +182,9 @@ export function registerRoutes(app: FastifyInstance, pool: pg.Pool) {
   app.get('/workspaces', async (req) => {
     const { rows } = await pool.query(
       `SELECT w.id, w.name, w.created_at AS "createdAt", m.role,
-         COALESCE(json_agg(json_build_object('id', b.id, 'name', b.name) ORDER BY b.created_at)
+         COALESCE(json_agg(json_build_object('id', b.id, 'name', b.name,
+           'specsReady', (SELECT count(*)::int FROM tasks t ${REFINEMENT_JOINS} WHERE t.board_id = b.id AND ${REFINEMENT} = 'ready'))
+           ORDER BY b.created_at)
            FILTER (WHERE b.id IS NOT NULL), '[]') AS boards
        FROM workspaces w
        JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = $1

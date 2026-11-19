@@ -317,7 +317,7 @@ RFC 2119 keywords the agent wrote (MUST, SHOULD, MAY, SHALL, REQUIRED and their 
 - **Do** render "Refine with AI" as an ink button and "Refine again" as an outline button.
 - **Do** keep glyphs still by default; loop only while work runs (refinement queued or running, outbox sending, CI running, waiting for a worker) and play once when a state arrives.
 - **Do** freeze every glyph, dial and transition under reduced motion.
-- **Do** use at most one black screen strip per screen, and only when it carries live or summary state. On home it appears once your workers have loaded (how many are online), and when items are unsent or the app is offline; on the task page its footer is the status readout.
+- **Do** use at most one black screen strip per screen, and only when it carries live or summary state. On home it shows how many workers are online and how many specs wait for review across every board (hidden on a saved offline copy), plus unsent items and the offline state; on the task page its footer is the status readout.
 - **Do** set the agent's MUST/SHOULD keywords as dark key-caps (ink fill, sheet text, mono 600, 4px radius).
 - **Do** use JetBrains Mono for data only: commits, paths, line ranges, counts, ids, dates.
 - **Do** separate surfaces with the three neutral fields and one-pixel seams.
@@ -330,7 +330,3 @@ RFC 2119 keywords the agent wrote (MUST, SHOULD, MAY, SHALL, REQUIRED and their 
 - **Don't** set headings, labels, buttons or prose in mono.
 - **Don't** use shadows, gradients, glass or blur, including on dragged cards and overlays.
 - **Don't** add colours, font families or radii outside the tokens in this file.
-
-## Open Gaps
-
-- The home strip has no specs-ready cell; counting ready specs across boards needs an API call that does not exist yet.
