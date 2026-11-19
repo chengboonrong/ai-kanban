@@ -19,6 +19,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
@@ -502,6 +503,146 @@ test('connect pairs with a code and keeps the checkouts only for the same API an
 
     await assert.rejects(cli('connect', 'BAD'), /pairing failed \(400\): invalid or expired code/);
   } finally {
+    api.close();
+  }
+});
+
+test('setup pairs, and without a terminal or with --no-service it only says what is left to do', async () => {
+  const api = await fakeApi({ 'POST /workers/pair': (b) => [201, { id: 'w1', name: b.name, ownerId: 'u1', token: 'wkr_new' }] });
+  const dir = tmp();
+  const config = path.join(dir, 'worker.json');
+  // HOME points at an empty folder as well: if a LaunchAgent were written, it would show up there, not in the real one.
+  const env = { ...process.env, AI_KANBAN_WORKER_CONFIG: config, HOME: dir };
+  const cli = (...args: string[]) => promisify(execFile)(process.execPath, [CLI, ...args], { env });
+  try {
+    const { stdout } = await cli('setup', 'abcde-fghjk', '--api', api.url, '--name', 'My Mac', '--no-service');
+    assert.deepEqual(api.requests, [{ route: 'POST /workers/pair', body: { code: 'abcde-fghjk', name: 'My Mac' } }]);
+    assert.deepEqual(JSON.parse(readFileSync(config, 'utf8')), {
+      apiUrl: api.url,
+      token: 'wkr_new',
+      name: 'My Mac',
+      ownerId: 'u1',
+      repositories: {},
+      models: ['opencode/deepseek-v4.1-flash-free'],
+      refiner: 'opencode',
+    });
+    assert.equal(statSync(config).mode & 0o777, 0o600);
+    assert.match(stdout, /Connected worker "My Mac"/);
+    assert.match(stdout, /No terminal to ask in; allow each repository with: allow <owner\/name> <path-to-checkout>/);
+    assert.match(stdout, /Skipped the background service; run `npm start`/);
+    assert.doesNotMatch(stdout, /Installed/);
+    assert.deepEqual(readdirSync(dir), ['worker.json'], 'nothing else was written, no LaunchAgent included');
+
+    await assert.rejects(cli('setup'), /usage: setup <code>/);
+    await assert.rejects(cli('setup', 'CODE', '--bogus'), /Unknown option/);
+  } finally {
+    api.close();
+  }
+});
+
+/** `cli.ts mcp` over its stdin and stdout, as a coding agent runs it. */
+function mcpClient(config: string) {
+  const child = spawn(process.execPath, [CLI, 'mcp'], { env: { ...process.env, AI_KANBAN_WORKER_CONFIG: config }, stdio: ['pipe', 'pipe', 'inherit'] });
+  const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+  const send = (message: object | string) => child.stdin.write((typeof message === 'string' ? message : JSON.stringify(message)) + '\n');
+  // Every stdout line must be JSON-RPC: a stray log line would fail the parse.
+  const next = async () => JSON.parse((await lines.next()).value as string);
+  let id = 0;
+  const rpc = async (method: string, params?: object) => (send({ jsonrpc: '2.0', id: ++id, method, params }), { id, ...(await next()) });
+  const tool = async (name: string, args: object) => (await rpc('tools/call', { name, arguments: args })).result;
+  return { child, send, next, rpc, tool };
+}
+
+test('mcp serves approved specs over stdio and refuses what the worker may not read', async () => {
+  const task = '11111111-1111-4111-8111-111111111111';
+  const item = { taskId: task, title: 'Add GitHub\nlogin', board: 'Roadmap', repository: 'acme/web', version: 2, approvedAt: '2026-11-19T10:00:00Z', issue: { number: 7, url: 'https://github.com/acme/web/issues/7', state: 'open' } };
+  const content = {
+    title: 'Add GitHub login',
+    summary: 'Let people connect GitHub.',
+    requirements: ['A Connect button'],
+    acceptanceCriteria: ['Clicking it starts the device flow', 'Signing out keeps GitHub connected'],
+    evidence: [
+      { path: 'lib/settings.dart', startLine: 1, endLine: 20, note: 'Settings page', verified: true },
+      { path: 'lib/gone.dart', startLine: 3, endLine: 4, note: 'Maybe here', verified: false },
+    ],
+    ambiguities: ['Should signing out disconnect GitHub?'],
+    approach: ['Add a button', 'Call the auth service'],
+    readiness: 70,
+  };
+  const api = await fakeApi({
+    'GET /worker/specs?repository=acme%2Fweb&repository=acme%2Fapi': () => [200, [item]],
+    'GET /worker/specs?repository=acme%2Fapi': () => [200, []],
+    [`GET /worker/specs/${task}`]: () => [200, { ...item, content, commitSha: 'a'.repeat(40) }],
+    'GET /worker/specs/22222222-2222-4222-8222-222222222222': () => [404, { message: 'no approved spec for this task' }],
+  });
+  const config = path.join(tmp(), 'worker.json');
+  const write = (repositories: object) => writeFileSync(config, JSON.stringify({ apiUrl: api.url, token: 'wkr_t', name: 'My Mac', repositories, models: [] }));
+  write({ 'acme/web': '/x', 'acme/api': '/y' });
+  const mcp = mcpClient(config);
+  try {
+    const init = await mcp.rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '1' } });
+    assert.deepEqual(init.result, { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'ai-kanban', version: '0.1.0' } });
+    assert.equal((await mcp.rpc('initialize', { protocolVersion: '1999-01-01' })).result.protocolVersion, '2025-06-18', 'an unknown version gets ours');
+
+    // A notification is never answered: the next line out is the ping's answer.
+    mcp.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    assert.deepEqual(await mcp.rpc('ping'), { id: 3, jsonrpc: '2.0', result: {} });
+    const unknown = await mcp.rpc('resources/list');
+    assert.deepEqual(unknown.error, { code: -32601, message: 'Method not found: resources/list' });
+    mcp.send({ jsonrpc: '2.0', method: 'resources/list' }); // unknown, but no id: still silent
+    mcp.send('{not json');
+    assert.deepEqual(await mcp.next(), { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+
+    const names = (await mcp.rpc('tools/list')).result.tools.map((t: { name: string }) => t.name);
+    assert.deepEqual(names, ['list_approved_specs', 'get_spec']);
+
+    const listed = await mcp.tool('list_approved_specs', {});
+    assert.equal(listed.isError, undefined);
+    assert.equal(listed.content[0].text, `- ${task}  Add GitHub login  (acme/web, v2, https://github.com/acme/web/issues/7 (open))`, 'a title stays on one line');
+    assert.equal((await mcp.tool('list_approved_specs', { repository: 'ACME/API' })).content[0].text, 'No approved specs.', 'case-insensitive, narrowed');
+
+    const refused = await mcp.tool('list_approved_specs', { repository: 'evil/repo' });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /evil\/repo is not allowed on this worker \(allowed: acme\/web, acme\/api\)/);
+    assert.deepEqual(api.requests.map((r) => r.route).filter((r) => r.includes('evil')), [], 'never asked the API about it');
+
+    const got = (await mcp.tool('get_spec', { taskId: task })).content[0].text as string;
+    assert.match(got, /^> Written by AI Kanban's read-only Refiner from the repository, and approved by a person\.\n\n# Add GitHub login\n/);
+    for (const part of [
+      '## Summary\nLet people connect GitHub.',
+      '## Acceptance criteria\n- Clicking it starts the device flow\n- Signing out keeps GitHub connected',
+      '## Requirements\n- A Connect button',
+      '`lib/settings.dart:1-20` Settings page\n',
+      '`lib/gone.dart:3-4` Maybe here (not verified against the commit)',
+      '## Suggested approach\n1. Add a button\n2. Call the auth service',
+      '## Open questions\n- Should signing out disconnect GitHub?',
+      'Readiness: 70/100',
+      `Commit: ${'a'.repeat(40)} (acme/web, spec version 2)`,
+      'Issue: https://github.com/acme/web/issues/7 (open)',
+    ]) assert.ok(got.includes(part), part);
+
+    const gone = await mcp.tool('get_spec', { taskId: '22222222-2222-4222-8222-222222222222' });
+    assert.deepEqual([gone.isError, gone.content[0].text], [true, 'AI Kanban answered 404: no approved spec for this task']);
+    assert.equal((await mcp.tool('get_spec', { taskId: '../runs' })).isError, true, 'only a task id reaches the URL');
+    assert.equal((await mcp.rpc('tools/call', { name: 'delete_everything', arguments: {} })).error.code, -32602);
+
+    // worker.json is read on each call: an allowed repository removed meanwhile is refused at once.
+    write({ 'acme/api': '/y' });
+    assert.equal((await mcp.tool('list_approved_specs', { repository: 'acme/web' })).isError, true);
+    write({});
+    assert.match((await mcp.tool('list_approved_specs', {})).content[0].text, /No repositories are allowed/);
+    rmSync(config);
+    assert.match((await mcp.tool('list_approved_specs', {})).content[0].text, /not set up/);
+    write({ 'acme/web': '/x' });
+    api.close();
+    const down = await mcp.tool('get_spec', { taskId: task });
+    assert.equal(down.isError, true, 'an API that is down is a tool error, not a crash');
+
+    mcp.child.stdin.end();
+    const [code] = await once(mcp.child, 'exit');
+    assert.equal(code, 0);
+  } finally {
+    mcp.child.kill('SIGKILL');
     api.close();
   }
 });

@@ -123,7 +123,9 @@ void main() {
     expect(find.byType(PairingDialog), findsOneWidget);
     expect(find.text('ABCDE-FGHJK'), findsOneWidget);
     expect(
-      find.text("npm run connect -- ABCDE-FGHJK --api 'http://localhost:8080'"),
+      find.text(
+        "npm install && npm run setup -- ABCDE-FGHJK --api 'http://localhost:8080'",
+      ),
       findsOneWidget,
     );
     expect(find.text('Works once. Expires at 2:32 PM.'), findsOneWidget);
@@ -132,7 +134,7 @@ void main() {
     await tester.pump();
     expect(
       copied,
-      "npm run connect -- ABCDE-FGHJK --api 'http://localhost:8080'",
+      "npm install && npm run setup -- ABCDE-FGHJK --api 'http://localhost:8080'",
     );
     expect(
       find.text('Copied'),

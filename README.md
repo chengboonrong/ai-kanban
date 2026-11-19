@@ -133,11 +133,13 @@ until it resets, or you set paid models in `worker.json`.
 cd services/worker
 npm install
 npm test
-npm run connect -- <code>                       # the code from the app's Workers page; saves ~/.config/ai-kanban/worker.json
-npm run checkouts                               # pick repositories from Orca's list (or: npm run allow -- owner/name ~/code/name)
-npm start                                       # polls the API and refines queued cards
-npm run service -- install                      # or keep it running in the background (macOS LaunchAgent)
+npm run setup -- <code>                         # the code from the app's Workers page: connect, pick checkouts, install the service
 ```
+
+`setup` is three steps you can also run alone: `npm run connect -- <code>` (saves `~/.config/ai-kanban/worker.json`),
+`npm run checkouts` (pick repositories from Orca's list, or `npm run allow -- owner/name ~/code/name`) and
+`npm run service -- install` (macOS LaunchAgent; or `npm start` to run it in a terminal). `npm run mcp` serves approved specs
+to your coding agent over MCP.
 
 Pairing, the background service, the Claude Code option and troubleshooting: [docs/setup/worker.md](docs/setup/worker.md).
 

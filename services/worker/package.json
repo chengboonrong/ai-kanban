@@ -6,10 +6,12 @@
     "node": ">=24"
   },
   "scripts": {
+    "setup": "node src/cli.ts setup",
     "connect": "node src/cli.ts connect",
     "checkouts": "node src/cli.ts checkouts",
     "allow": "node src/cli.ts allow",
     "start": "node src/cli.ts start",
+    "mcp": "node src/cli.ts mcp",
     "service": "node src/cli.ts service",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit"

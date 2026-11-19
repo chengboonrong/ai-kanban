@@ -20,6 +20,21 @@ const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford base32
 /** Uppercase, no separators, and the letters people mistake for digits read as those digits. */
 const normaliseCode = (code: string) => code.toUpperCase().replace(/[-\s]/g, '').replace(/[IL]/g, '1').replace(/O/g, '0');
 
+/**
+ * Each task's newest approved spec version ($1 = the worker's owner), with the content; the caller adds filters
+ * (starting with AND) and `ORDER BY s.task_id, s.version DESC` so DISTINCT ON keeps the newest.
+ */
+const APPROVED_SPECS = `SELECT DISTINCT ON (s.task_id) s.task_id AS "taskId", t.title, b.name AS board, lower(b.repository) AS repository,
+    s.version, s.approved_at AS "approvedAt",
+    CASE WHEN gi.state = 'created' THEN json_build_object('number', gi.number, 'url', gi.url, 'state', gi.issue_state) END AS issue,
+    s.content, s.repository_commit_sha AS "commitSha"
+  FROM specs s
+  JOIN tasks t ON t.id = s.task_id
+  JOIN boards b ON b.id = t.board_id
+  JOIN workspace_members m ON m.workspace_id = b.workspace_id AND m.user_id = $1
+  LEFT JOIN github_issues gi ON gi.task_id = t.id
+  WHERE s.approved_at IS NOT NULL AND b.repository IS NOT NULL`;
+
 type Id = { id: string };
 
 export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
@@ -247,6 +262,35 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       return { id: run.id, repository: run.repository, task };
     },
   );
+
+  // Approved specs for the worker's own coding agent (its MCP server). Scope is the owner's, as for a signed-in call: boards
+  // of workspaces they belong to. Only a person's approval makes a spec readable here; a draft never is.
+  app.get(
+    '/worker/specs',
+    {
+      config: worker,
+      schema: { querystring: { type: 'object', properties: { repository: { type: 'array', maxItems: 200, items: { ...REPOSITORY, type: 'string' } } } } },
+    },
+    async (req) => {
+      const { repository } = req.query as { repository?: string[] };
+      const { rows } = await pool.query(
+        `SELECT "taskId", title, board, repository, version, "approvedAt", issue FROM (${APPROVED_SPECS} ${
+          repository ? 'AND lower(b.repository) = ANY($2)' : ''
+        } ORDER BY s.task_id, s.version DESC) latest ORDER BY "approvedAt" DESC LIMIT 100`,
+        repository ? [req.userId, repository.map((r) => r.toLowerCase())] : [req.userId],
+      );
+      return rows;
+    },
+  );
+
+  app.get('/worker/specs/:taskId', { config: worker, schema: { params: { type: 'object', required: ['taskId'], properties: { taskId: uuid } } } }, async (req) => {
+    const { rows: [found] } = await pool.query(`${APPROVED_SPECS} AND s.task_id = $2 ORDER BY s.task_id, s.version DESC`, [
+      req.userId,
+      (req.params as { taskId: string }).taskId,
+    ]);
+    if (!found) throw httpError(404, 'no approved spec for this task'); // also when it is outside the owner's boards
+    return found;
+  });
 
   app.post(
     '/worker/runs/:id/events',

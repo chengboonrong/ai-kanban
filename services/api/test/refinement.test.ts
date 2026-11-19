@@ -576,3 +576,61 @@ test('the harness is stored, and only the owner sees which worker ran it', async
   await pool.query(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'member')`, [b.workspace_id, (await bob('GET', '/me')).json().id]);
   assert.equal((await latestRun(bob, task.id)).workerName, null);
 });
+
+test("a worker reads the newest approved spec of its owner's boards, and nothing else", async () => {
+  const { api, board, repository, worker } = await fixture();
+  const readable = async (title: string) => {
+    const task = (await api('POST', `/boards/${board.id}/tasks`, { title })).json();
+    const run = (await claim(worker, repository)).json();
+    const v = (await worker('POST', `/worker/runs/${run.id}/complete`, done(spec(title)))).json();
+    return { task, v };
+  };
+  const { task: shipped, v: v1 } = await readable('Shipped');
+  const { task: draft } = await readable('Still a draft');
+  assert.equal((await api('POST', `/specs/${v1.id}/approve`)).statusCode, 200);
+
+  const listed = (await worker('GET', '/worker/specs')).json();
+  assert.deepEqual(listed.map((s: { taskId: string }) => s.taskId), [shipped.id], 'a draft is not listed');
+  assert.deepEqual(Object.keys(listed[0]).sort(), ['approvedAt', 'board', 'issue', 'repository', 'taskId', 'title', 'version']);
+  assert.deepEqual([listed[0].board, listed[0].repository, listed[0].version], ['Roadmap', repository, 1]);
+  assert.equal((await worker('GET', `/worker/specs/${draft.id}`)).statusCode, 404, 'unapproved');
+
+  // A newer version that is not approved yet leaves the approved one as the readable spec.
+  assert.equal((await api('POST', `/tasks/${shipped.id}/runs`)).statusCode, 201);
+  const run2 = (await claim(worker, repository)).json();
+  await worker('POST', `/worker/runs/${run2.id}/complete`, done(spec('Shipped, revised')));
+  const one = (await worker('GET', `/worker/specs/${shipped.id}`)).json();
+  assert.deepEqual([one.version, one.content.title, one.commitSha], [1, 'Shipped', 'a'.repeat(40)]);
+
+  // Approving the newer one replaces it, newest approval first.
+  const latest = (await api('GET', `/tasks/${shipped.id}/refinement`)).json().spec;
+  assert.equal((await api('POST', `/specs/${latest.id}/approve`)).statusCode, 200);
+  assert.equal((await worker('GET', `/worker/specs/${shipped.id}`)).json().content.title, 'Shipped, revised');
+  const second = await readable('Second');
+  assert.equal((await api('POST', `/specs/${second.v.id}/approve`)).statusCode, 200);
+  assert.deepEqual((await worker('GET', '/worker/specs')).json().map((s: { title: string }) => s.title), ['Second', 'Shipped']);
+});
+
+test('the specs a worker reads can be narrowed by repository, and a stranger never sees them', async () => {
+  const { api, board, repository, worker } = await fixture();
+  const task = (await api('POST', `/boards/${board.id}/tasks`, { title: 'Add GitHub login' })).json();
+  const run = (await claim(worker, repository)).json();
+  const v1 = (await worker('POST', `/worker/runs/${run.id}/complete`, done())).json();
+  await api('POST', `/specs/${v1.id}/approve`);
+
+  const ids = async (query: string) => (await worker('GET', `/worker/specs${query}`)).json().map((s: { taskId: string }) => s.taskId);
+  assert.equal((await ids(`?repository=${repository.toUpperCase()}`)).length, 1, 'GitHub names are case-insensitive');
+  assert.equal((await ids(`?repository=acme/other&repository=${repository}`)).length, 1);
+  assert.deepEqual(await ids('?repository=acme/other'), []);
+  assert.equal((await worker('GET', '/worker/specs?repository=not%20a%20repo')).statusCode, 400);
+  assert.equal((await api('GET', '/worker/specs')).statusCode, 401, 'a signed-in session is not a worker');
+
+  // Another account's worker, and a board with no repository, show nothing.
+  const strangers = await registerWorker(await user());
+  assert.deepEqual((await strangers('GET', '/worker/specs')).json(), []);
+  assert.equal((await strangers('GET', `/worker/specs/${task.id}`)).statusCode, 404);
+  assert.equal((await worker('GET', '/worker/specs/not-a-uuid')).statusCode, 400);
+  await api('PATCH', `/boards/${board.id}`, { repository: null });
+  assert.deepEqual((await worker('GET', '/worker/specs')).json(), []);
+  assert.equal((await worker('GET', `/worker/specs/${task.id}`)).statusCode, 404);
+});
