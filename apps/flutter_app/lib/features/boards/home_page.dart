@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,10 +14,20 @@ import '../auth/auth.dart';
 import '../tasks/outbox.dart';
 
 // autoDispose: the list lives only while the home screen shows it, so it can't outlive the session that loaded it.
+// Refreshed every 15 s so the ready-for-review count follows runs finishing on any worker, a teammate's too.
 final workspacesProvider =
-    FutureProvider.autoDispose<({List<Workspace> items, bool offline})>(
-      (ref) => ref.watch(apiProvider).workspaces(),
-    );
+    FutureProvider.autoDispose<({List<Workspace> items, bool offline})>((
+      ref,
+    ) async {
+      try {
+        return await ref.watch(apiProvider).workspaces();
+      } finally {
+        if (ref.mounted) {
+          final timer = Timer(const Duration(seconds: 15), ref.invalidateSelf);
+          ref.onDispose(timer.cancel);
+        }
+      }
+    });
 
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
