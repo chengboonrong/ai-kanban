@@ -360,7 +360,9 @@ class _ImportIssueDialogState extends ConsumerState<ImportIssueDialog> {
           .repoIssues(widget.boardId, page: _page + 1);
       if (!mounted) return;
       setState(() {
-        _issues.addAll(next.issues);
+        // Sorted by last update: one updated between pages moves up, and the next page repeats one that slid down.
+        final seen = {for (final i in _issues) i.number};
+        _issues.addAll(next.issues.where((i) => seen.add(i.number)));
         _more = next.more;
         _page++;
       });

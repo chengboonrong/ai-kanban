@@ -625,14 +625,19 @@ test('the specs a worker reads can be narrowed by repository, and a stranger nev
   assert.equal((await worker('GET', '/worker/specs?repository=not%20a%20repo')).statusCode, 400);
   assert.equal((await api('GET', '/worker/specs')).statusCode, 401, 'a signed-in session is not a worker');
 
-  // Another account's worker, and a board with no repository, show nothing.
+  // Another account's worker shows nothing.
   const strangers = await registerWorker(await user());
   assert.deepEqual((await strangers('GET', '/worker/specs')).json(), []);
   assert.equal((await strangers('GET', `/worker/specs/${task.id}`)).statusCode, 404);
   assert.equal((await worker('GET', '/worker/specs/not-a-uuid')).statusCode, 400);
+
+  // The spec describes the repository it was refined against, wherever the board points now.
+  await api('PATCH', `/boards/${board.id}`, { repository: 'acme/other' });
+  assert.deepEqual(await ids(`?repository=${repository}`), [task.id]);
+  assert.deepEqual(await ids('?repository=acme/other'), []);
+  assert.equal((await worker('GET', `/worker/specs/${task.id}`)).json().repository, repository);
   await api('PATCH', `/boards/${board.id}`, { repository: null });
-  assert.deepEqual((await worker('GET', '/worker/specs')).json(), []);
-  assert.equal((await worker('GET', `/worker/specs/${task.id}`)).statusCode, 404);
+  assert.deepEqual(await ids(''), [task.id]);
 });
 
 // ---- Comments on a spec, sent back to the Refiner ----

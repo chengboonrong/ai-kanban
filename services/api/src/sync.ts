@@ -203,6 +203,10 @@ export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool, gh?: G
     // A transferred issue redirects to its new repository, which isn't this board's.
     if (!issue?.repository_url?.toLowerCase().endsWith(`/repos/${repository}`)) throw httpError(404, `issue #${number} not found in ${repository}`);
     if (issue.pull_request) throw httpError(400, `#${number} is a pull request, not an issue`);
+    // An issue this app filed is a card's already; anyone can paste the marker, so only the app's own counts.
+    if (issue.body?.includes(MARKER) && byApp(issue, await gh.app(repository))) {
+      throw httpError(409, `#${number} was filed by AI Kanban; it is already a card`);
+    }
     const found = issue;
     const taken = new Error('the issue is already on a board');
     try {
@@ -250,7 +254,8 @@ interface Spec {
 
 const MAX_BODY = 60_000;
 const TRUNCATED = '\n\n_Truncated; the full spec is in AI Kanban._';
-const marker = (taskId: string) => `<!-- ai-kanban:task:${taskId} -->`;
+const MARKER = '<!-- ai-kanban:task:';
+const marker = (taskId: string) => `${MARKER}${taskId} -->`;
 const specMarker = (taskId: string) => `<!-- ai-kanban:spec:${taskId} -->`;
 /** Spec text is data: it must not mention (notify) people or open an HTML comment that hides the rest. */
 // owner/repo#N would also post a cross-reference on another repository's issue.
@@ -398,6 +403,10 @@ function failure(e: GitHubError, repository: string, what: 'issue' | 'comment' =
   return e.message;
 }
 
+/** Whether the app created it: GitHub sets performed_via_github_app, or at least the author `<slug>[bot]`. */
+const byApp = (x: Issue | Comment, app: { id: number; slug: string }) =>
+  x.performed_via_github_app?.id === app.id || x.user?.login === `${app.slug}[bot]`;
+
 /** The issue an earlier attempt created: newest first, back to an hour before the row was queued. */
 // ponytail: pages through every issue since then; fine while retries are minutes apart, switch to the search API
 // (marker in:body) if a row can stay unfiled for weeks in a busy repository.
@@ -410,8 +419,7 @@ async function findOwnIssue(gh: GitHubClient, job: IssueJob) {
     for (const issue of issues) {
       if (Date.parse(issue.created_at) < since) return undefined;
       // Anyone can paste the marker; only an issue this app created counts.
-      const byApp = issue.performed_via_github_app?.id === app.id || issue.user?.login === `${app.slug}[bot]`;
-      if (!issue.pull_request && issue.body?.includes(marker(job.task_id)) && byApp) return issue;
+      if (!issue.pull_request && issue.body?.includes(marker(job.task_id)) && byApp(issue, app)) return issue;
     }
     if (issues.length < 100) return undefined;
   }
@@ -459,18 +467,26 @@ async function postComment(pool: pg.Pool, gh: GitHubClient, job: CommentJob) {
     if (!comment) {
       // Renewed just before writing, fenced by attempts, as for issues. A newer version approved meanwhile also stops
       // this attempt (state is pending again); the next one, once this lease lapses, writes that version.
-      const { rowCount } = await pool.query(`UPDATE github_comments SET locked_until = ${LEASE} WHERE task_id = $1 AND attempts = $2 AND state = 'posting'`, ours);
-      if (!rowCount) return;
-      const id = job.comment_id ?? found?.id;
+      const renew = async () =>
+        (await pool.query(`UPDATE github_comments SET locked_until = ${LEASE} WHERE task_id = $1 AND attempts = $2 AND state = 'posting'`, ours)).rowCount;
+      if (!(await renew())) return;
       const path = `/repos/${repository}/issues`;
-      // Edit the one comment; if someone deleted it, post it again.
-      const edited = id
-        ? await gh.request<Comment>(repository, 'PATCH', `${path}/comments/${id}`, { body }).catch((e) => {
-            if (e instanceof GitHubError && e.status === 404) return undefined;
-            throw e;
-          })
-        : undefined;
-      comment = edited ?? (await gh.request<Comment>(repository, 'POST', `${path}/${job.number}/comments`, { body }));
+      const edit = (id: string | number) =>
+        gh.request<Comment>(repository, 'PATCH', `${path}/comments/${id}`, { body }).catch((e) => {
+          if (e instanceof GitHubError && e.status === 404) return undefined; // deleted on GitHub
+          throw e;
+        });
+      const id = job.comment_id ?? found?.id;
+      comment = id ? await edit(id) : undefined;
+      if (id && !comment) {
+        // Someone deleted it. An earlier attempt may have posted it again and lost the answer: adopt that one instead.
+        const again = await findOwnComment(gh, job);
+        if (!(await renew())) return; // the search may have outlasted the lease
+        if (again) comment = await edit(again.id);
+      }
+      comment ??= await gh.request<Comment>(repository, 'POST', `${path}/${job.number}/comments`, { body });
+      // fetch follows a redirect (a transferred issue) and turns the POST into a GET, which answers with something else.
+      if (typeof comment?.id !== 'number') throw new GitHubError(0, "GitHub didn't return the comment; the issue may have been transferred", false);
     }
     const posted = comment;
     await tx(pool, async (c) => {
@@ -506,8 +522,7 @@ async function findOwnComment(gh: GitHubClient, job: CommentJob) {
     );
     for (const comment of comments) {
       // Anyone can paste the marker; only a comment this app posted counts.
-      const byApp = comment.performed_via_github_app?.id === app.id || comment.user?.login === `${app.slug}[bot]`;
-      if (comment.body?.includes(specMarker(job.task_id)) && byApp) return comment;
+      if (comment.body?.includes(specMarker(job.task_id)) && byApp(comment, app)) return comment;
     }
     if (comments.length < 100) return undefined;
   }

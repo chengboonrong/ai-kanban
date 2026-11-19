@@ -618,6 +618,56 @@ test('a version approved while the comment is being posted waits for that attemp
   assert.ok(f.repo.comments[0].body.includes('## AI Kanban spec (version 2)\n\nSecond take'));
 });
 
+test('a comment deleted on GitHub is posted again once, even when that answer is lost', async () => {
+  const f = await fixture();
+  opened(f);
+  const task = await imported(f);
+  assert.equal((await f.api('POST', `/specs/${await handIn(f)}/approve`)).statusCode, 200);
+  await syncOnce(pool, gh);
+  const first = await commentRow(task.id);
+  assert.equal(first.state, 'posted');
+
+  f.repo.comments.length = 0; // someone deletes it
+  assert.equal((await f.api('POST', `/tasks/${task.id}/runs`)).statusCode, 201);
+  assert.equal((await f.api('POST', `/specs/${await handIn(f, spec({ summary: 'Second take' }))}/approve`)).statusCode, 200);
+  f.repo.failures.push({ match: 'POST /issues/1/comments', drop: true });
+  await syncOnce(pool, gh);
+  assert.equal((await commentRow(task.id)).state, 'pending', 'the answer was lost');
+  assert.equal(f.repo.comments.length, 1, 'GitHub did post it');
+
+  await pool.query('UPDATE github_comments SET next_attempt_at = now() WHERE task_id = $1', [task.id]);
+  await syncOnce(pool, gh);
+  const posted = await commentRow(task.id);
+  assert.deepEqual([posted.state, posted.comment_id], ['posted', String(f.repo.comments[0].id)]);
+  assert.equal(f.repo.comments.length, 1, 'adopted, not posted beside it');
+  assert.ok(f.repo.comments[0].body.includes('## AI Kanban spec (version 2)\n\nSecond take'));
+});
+
+test("an issue the app filed can't be imported as another card; the marker pasted by someone else doesn't count", async () => {
+  const f = await fixture();
+  const body = `<!-- ai-kanban:task:${randomUUID()} -->\n\nA spec`;
+  opened(f, { body, user: { login: BOT } }); // #1, filed by the app
+  opened(f, { body }); // #2, the marker pasted by octocat
+  const own = await f.api('POST', `/boards/${f.board.id}/github/import`, { number: 1 });
+  assert.deepEqual([own.statusCode, own.json().message], [409, '#1 was filed by AI Kanban; it is already a card']);
+  assert.equal((await f.api('GET', `/boards/${f.board.id}`)).json().columns[0].tasks.length, 0);
+  await imported(f, 2);
+});
+
+test("a spec of another repository can't be approved for an imported issue", async () => {
+  const f = await fixture();
+  opened(f);
+  const task = await imported(f);
+  const moved = `acme/gh-${randomUUID().slice(0, 8)}`;
+  await f.api('PATCH', `/boards/${f.board.id}`, { repository: moved }); // cancels the import's queued run
+  assert.equal((await f.api('POST', `/tasks/${task.id}/runs`)).statusCode, 201);
+  const run = (await f.worker('POST', '/worker/claim', { repositories: [moved] })).json();
+  const done = await f.worker('POST', `/worker/runs/${run.id}/complete`, { model: 'm', commitSha: 'a'.repeat(40), spec: spec() });
+  const res = await f.api('POST', `/specs/${done.json().id}/approve`);
+  assert.deepEqual([res.statusCode, res.json().message], [409, `the card's issue is in ${f.repository}, not ${moved}; point the board back and refine again`]);
+  assert.equal(await commentRow(task.id), undefined, 'nothing queued');
+});
+
 test('a comment GitHub refuses fails with the reason and is posted again on retry', async () => {
   const f = await fixture();
   opened(f);

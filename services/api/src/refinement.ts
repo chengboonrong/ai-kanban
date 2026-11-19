@@ -24,16 +24,17 @@ const normaliseCode = (code: string) => code.toUpperCase().replace(/[-\s]/g, '')
  * Each task's newest approved spec version ($1 = the worker's owner), with the content; the caller adds filters
  * (starting with AND) and `ORDER BY s.task_id, s.version DESC` so DISTINCT ON keeps the newest.
  */
-const APPROVED_SPECS = `SELECT DISTINCT ON (s.task_id) s.task_id AS "taskId", t.title, b.name AS board, lower(b.repository) AS repository,
+const APPROVED_SPECS = `SELECT DISTINCT ON (s.task_id) s.task_id AS "taskId", t.title, b.name AS board, lower(r.repository) AS repository,
     s.version, s.approved_at AS "approvedAt",
     CASE WHEN gi.state = 'created' THEN json_build_object('number', gi.number, 'url', gi.url, 'state', gi.issue_state) END AS issue,
     s.content, s.repository_commit_sha AS "commitSha"
   FROM specs s
+  JOIN agent_runs r ON r.id = s.run_id -- the repository the spec describes, wherever the board points now
   JOIN tasks t ON t.id = s.task_id
   JOIN boards b ON b.id = t.board_id
   JOIN workspace_members m ON m.workspace_id = b.workspace_id AND m.user_id = $1
   LEFT JOIN github_issues gi ON gi.task_id = t.id
-  WHERE s.approved_at IS NOT NULL AND b.repository IS NOT NULL`;
+  WHERE s.approved_at IS NOT NULL`;
 
 type Id = { id: string };
 
@@ -263,10 +264,14 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       if (board.repository !== run.repository) {
         throw httpError(409, `the board now points at ${board.repository ?? 'no repository'}; refine again`);
       }
+      // An imported issue stays in its repository; the spec of another one doesn't belong on it.
+      const { rows: [issue] } = await c.query('SELECT origin, repository FROM github_issues WHERE task_id = $1', [spec.taskId]);
+      if (issue?.origin === 'imported' && issue.repository !== run.repository) {
+        throw httpError(409, `the card's issue is in ${issue.repository}, not ${run.repository}; point the board back and refine again`);
+      }
       const { rows } = await c.query(`UPDATE specs SET approved_by = $2, approved_at = now() WHERE id = $1 RETURNING ${SPEC}`, [id, req.userId]);
       await logActivity(c, spec.taskId, req.userId, 'spec_approved', { version: spec.version });
       // An imported issue is GitHub's (someone else wrote it): the spec goes on it as a comment, never as a second issue.
-      const { rows: [issue] } = await c.query('SELECT origin FROM github_issues WHERE task_id = $1', [spec.taskId]);
       if (issue?.origin === 'imported') await queueComment(c, spec.taskId, spec.version);
       else await queueIssue(c, spec.taskId, run.repository);
       return rows[0];
@@ -341,7 +346,7 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       const { repository } = req.query as { repository?: string[] };
       const { rows } = await pool.query(
         `SELECT "taskId", title, board, repository, version, "approvedAt", issue FROM (${APPROVED_SPECS} ${
-          repository ? 'AND lower(b.repository) = ANY($2)' : ''
+          repository ? 'AND lower(r.repository) = ANY($2)' : ''
         } ORDER BY s.task_id, s.version DESC) latest ORDER BY "approvedAt" DESC LIMIT 100`,
         repository ? [req.userId, repository.map((r) => r.toLowerCase())] : [req.userId],
       );

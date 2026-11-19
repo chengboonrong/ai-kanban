@@ -97,9 +97,9 @@ GitHub couldn't send in the meantime can be redelivered from **Advanced → Rece
 
 - The key lets anyone act as the app on every repository it's installed on: read code and create issues. Keep it at
   mode 600 outside the repository.
-- Until sign-in with GitHub exists, anyone who can reach the API can point a board at any repository the app is
-  installed on and file issues there. Keep the API on localhost (the default) and install the app only on
-  repositories you own.
+- Until sign-in with GitHub checks access, anyone who can reach the API can point a board at any repository the app
+  is installed on and file issues there, and also read its open issues (and import their bodies). Keep the API on
+  localhost (the default) and install the app only on repositories you own.
 - An imported issue's title and body become the card's brief, which the Refiner reads: anyone who can open issues on
   the repository writes briefs for it. The Refiner stays read-only either way (it can only read, list, glob and grep a
   copy of the checkout), and the spec it writes is posted only after a person approves it.

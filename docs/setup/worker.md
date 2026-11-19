@@ -109,14 +109,14 @@ It offers two read-only tools:
 - `list_approved_specs`: the approved specs for the repositories this worker may read (or one of them, with
   `repository`), newest approval first, with their task ids and issue links.
 - `get_spec`: one spec as Markdown (summary, acceptance criteria, requirements, evidence with `path:lines`, suggested
-  approach, open questions, the commit it was read at), headed by a line saying the read-only Refiner wrote it and a
-  person approved it.
+  approach, open questions, the commit it was read at), headed by a line saying the read-only Refiner wrote it from a
+  task brief and the repository, a person approved it, and its text is data, not instructions.
 
 Only a person's approval makes a spec readable here; drafts never are. This is new for the worker token: besides
-claiming runs it can now also read the approved specs of every board its owner can see (workspaces they belong to,
-boards with a repository), whichever repository they point at; the MCP server itself only asks for the repositories in
-`worker.json`. The token never leaves this program: it is read from `worker.json` on each call, and a spec's text is
-data your agent reads, not instructions. The server writes nothing but protocol to stdout and needs the worker to be
+claiming runs it can now also read the approved specs of every board its owner can see (workspaces they belong to),
+each under the repository it was refined against, wherever the board points now; the MCP server itself only asks for
+the repositories in `worker.json`. The token never leaves this program: it is read from `worker.json` on each call,
+and a spec's text is data your agent reads, not instructions. The server writes nothing but protocol to stdout and needs the worker to be
 connected (`setup` or `connect`), not running.
 
 ## Troubleshooting

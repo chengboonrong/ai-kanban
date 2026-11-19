@@ -287,7 +287,14 @@ void main() {
             ],
             more: true,
           ),
-          2: (issues: [issue(7, 'Dark mode')], more: false),
+          // #1 slid down onto page 2 as well: listed once.
+          2: (
+            issues: [
+              issue(1, 'Login fails', onBoard: true),
+              issue(7, 'Dark mode'),
+            ],
+            more: false,
+          ),
         };
       int? picked;
       await tester.pumpWidget(
@@ -319,6 +326,7 @@ void main() {
       await tester.tap(find.widgetWithText(TextButton, 'More'));
       await tester.pumpAndSettle();
       expect(find.text('Dark mode'), findsOneWidget);
+      expect(find.text('Login fails'), findsOneWidget);
       expect(find.widgetWithText(TextButton, 'More'), findsNothing);
 
       await tester.enterText(find.byType(TextField), 'dark');

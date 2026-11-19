@@ -67,7 +67,8 @@ All three are one Flutter app with adaptive layouts.
 2. **Refine**: the orchestrator leases a refinement job to a worker of whoever connected the board's repository, on
    their own machine (there is no hosted worker). OpenCode with DeepSeek, or optionally Claude Code, reads a pinned commit and returns a versioned spec with evidence and open questions.
 3. **Approve**: you review the spec, comment on any of its items (an answer, for an open question) and send the
-   comments back for a revised version, or approve it; approval creates one GitHub issue through the GitHub App.
+   comments back for a revised version, or approve it; approval files one GitHub issue through the GitHub App, or, for
+   a card imported from an issue, posts the spec on that issue as a comment.
 4. **Track**: GitHub webhooks are verified, deduplicated and reconciled; GitHub's review decision and CI status land on
    the card (the app refreshes while issues are queued or open; SSE later).
    Your column choice stays yours, separate from GitHub's status.
@@ -161,8 +162,9 @@ Approving a spec queues one GitHub issue, filed by a GitHub App from the spec. P
 or linked in the PR's Development sidebar, which shows with the PR's next update) or whose branch in the repository
 starts with `12-` show on the card and the task page with GitHub's review decision and CI status. Register a development app and a webhook tunnel with
 [docs/setup/github-app.md](docs/setup/github-app.md); without it the API logs `GitHub sync off` and issues stay
-queued. Webhooks arrive on a separate port (8081) so the tunnel exposes nothing else. Until sign-in with GitHub exists,
-keep the API on localhost: anyone who can reach it could file issues in any repository the app is installed on.
+queued. Webhooks arrive on a separate port (8081) so the tunnel exposes nothing else. Until sign-in with GitHub
+checks access, keep the API on localhost: anyone who can reach it could file issues in any repository the app is
+installed on, and also read the open issues of any such repository (and import their bodies) by pointing a board at it.
 
 **Import GitHub issue** (the board's repository menu) lists the repository's open issues and makes a card from the one
 you pick; each issue can be a card on one board only. The card is refined like any other, and approving its spec posts
