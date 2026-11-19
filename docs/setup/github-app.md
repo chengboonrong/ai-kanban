@@ -40,7 +40,7 @@ Profile picture → **Settings** → **Developer settings** → **GitHub Apps** 
 | Callback URL | Leave empty |
 | Expire user authorization tokens | Keep checked |
 | Request user authorization (OAuth) during installation | Leave unchecked |
-| Enable Device Flow | Check (sign-in with GitHub will use it later) |
+| Enable Device Flow | **Check** (sign-in with GitHub uses it) |
 | Setup URL | Leave empty |
 | Webhook → Active | **Checked** |
 | Webhook URL | `https://<random>.trycloudflare.com/github/webhook` from step 1 |
@@ -88,6 +88,10 @@ GITHUB_APP_PRIVATE_KEY_PATH=/Users/<you>/.config/ai-kanban/github-app.pem
 
 `npm run dev` reads `.env`. The API logs `GitHub sync on` at start, or what's missing.
 
+To sign in with GitHub instead of the dev login, start the API with `AUTH_MODE=github` (for example
+`AUTH_MODE=github node --env-file-if-exists=.env src/server.ts` in `services/api`). It uses the same client ID and no
+client secret.
+
 ## 6. When the tunnel URL changes
 
 App settings → **General** → **Webhook URL** → paste the new URL with `/github/webhook` → **Save changes**. Deliveries
@@ -97,9 +101,13 @@ GitHub couldn't send in the meantime can be redelivered from **Advanced → Rece
 
 - The key lets anyone act as the app on every repository it's installed on: read code and create issues. Keep it at
   mode 600 outside the repository.
-- Until sign-in with GitHub checks access, anyone who can reach the API can point a board at any repository the app
-  is installed on and file issues there, and also read its open issues (and import their bodies). Keep the API on
-  localhost (the default) and install the app only on repositories you own.
+- With `AUTH_MODE=github`, every action that reads from or writes to a repository through the app (connecting it to
+  a board, listing or importing issues, approving a spec, retrying a filing) first asks GitHub, as the app, whether
+  the signed-in user has write access there; the app's Metadata permission covers that. Anyone with a GitHub account
+  can still sign in and use their own boards. With `AUTH_MODE=dev` nothing is checked: keep a dev API on localhost and
+  install the app only on repositories you own.
+- Device Flow codes can be phished: whoever starts a sign-in and gets someone else to enter its code on GitHub is signed
+  in as them. GitHub shows the app's name on the approval page; only enter a code the app on your own screen showed.
 - An imported issue's title and body become the card's brief, which the Refiner reads: anyone who can open issues on
   the repository writes briefs for it. The Refiner stays read-only either way (it can only read, list, glob and grep a
   copy of the checkout), and the spec it writes is posted only after a person approves it.

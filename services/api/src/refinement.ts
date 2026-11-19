@@ -247,9 +247,10 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
 
   app.post('/specs/:id/approve', { schema: { params: idParams } }, async (req) => {
     const { id } = req.params as Id;
-    const { rows: [found] } = await pool.query('SELECT task_id FROM specs WHERE id = $1', [id]);
+    const { rows: [found] } = await pool.query('SELECT s.task_id, r.repository FROM specs s JOIN agent_runs r ON r.id = s.run_id WHERE s.id = $1', [id]);
     if (!found) throw httpError(404, 'spec not found');
     const boardId = await boardFor(pool, req.userId, 'task', found.task_id);
+    await app.requireWrite(req.userId, found.repository); // the run's repository, where the issue or comment goes; it never changes
     return tx(pool, async (c) => {
       // Board before task, the order a task delete takes them in; the share lock keeps the repository put until the issue is queued.
       const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1 FOR SHARE', [boardId]);

@@ -7,7 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { createPool } from '../src/db.ts';
-import { type GitHubClient, type GitHubConfig, gitHubClient, validSignature } from '../src/github.ts';
+import { type GitHubClient, type GitHubConfig, type GitHubError, gitHubClient, validSignature } from '../src/github.ts';
 import { migrate } from '../src/migrate.ts';
 import { pairWorker } from './helpers.ts';
 import { buildWebhookApp, syncOnce } from '../src/sync.ts';
@@ -25,8 +25,11 @@ type FakeComment = { id: number; issue: number; html_url: string; body: string; 
 /** An injected response for the next matching call: an error status, a dropped connection, or a hold until `wait` settles. */
 type Failure = { match: string; status?: number; headers?: Record<string, string>; drop?: boolean; wait?: Promise<void> };
 type FakeRepo = { id: number; issues: FakeIssue[]; comments: FakeComment[]; prs: Map<number, object>; failures: Failure[];
-  onGraphql?: (n: number) => Promise<void> };
+  onGraphql?: (n: number) => Promise<void>; access?: Map<string, { permission: string; user: { id: number } }> };
 const repos = new Map<string, FakeRepo>();
+// Device Flow: each device code's answers to the token poll, in order (the last one repeats); the user each token belongs to.
+const devices = new Map<string, object[]>();
+const tokenUsers = new Map<string, { id: number; login: string; name: string | null }>();
 const calls: string[] = [];
 let commentIds = 0;
 
@@ -56,6 +59,22 @@ const fake = createServer(async (req, res) => {
     res.writeHead(status, { 'content-type': 'application/json', ...headers });
     res.end(JSON.stringify(data));
   };
+  if (url.pathname === '/login/device/code') {
+    const code = `dc-${randomUUID()}`;
+    devices.set(code, [{ error: 'authorization_pending' }]);
+    return send(200, { device_code: code, user_code: 'WDJB-MJHT', verification_uri: `${config.webUrl}/login/device`, expires_in: 900, interval: 5 });
+  }
+  if (url.pathname === '/login/oauth/access_token') {
+    const answers = devices.get(url.searchParams.get('device_code')!) ?? [{ error: 'incorrect_device_code' }];
+    return send(200, answers.length > 1 ? answers.shift() : answers[0]);
+  }
+  if (url.pathname === '/user') {
+    if (req.headers.authorization === 'Bearer gho_limited') {
+      return send(403, { message: 'API rate limit exceeded' }, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': `${Math.floor(Date.now() / 1000) + 3600}` });
+    }
+    const me = tokenUsers.get(req.headers.authorization?.replace('Bearer ', '') ?? '');
+    return me ? send(200, me) : send(401, { message: 'Bad credentials' });
+  }
   if (url.pathname.startsWith('/app/installations/')) return send(201, { token: 'ghs_fake', expires_at: new Date(Date.now() + 3_600_000).toISOString() });
   const [, name, rest] =
     url.pathname === '/graphql' ? ['', `${body.variables.owner}/${body.variables.name}`, '/graphql'] : (/^\/repos\/([^/]+\/[^/]+)(.*)$/.exec(url.pathname) ?? []);
@@ -69,6 +88,11 @@ const fake = createServer(async (req, res) => {
 
   if (call === 'GET /installation') return send(200, { id: 1, app_id: APP_ID, app_slug: 'ai-kanban-test' });
   if (call === 'GET /') return send(200, { id: repo.id, full_name: name });
+  const collaborator = /^GET \/collaborators\/([^/]+)\/permission$/.exec(call)?.[1];
+  if (collaborator) {
+    const access = repo.access?.get(decodeURIComponent(collaborator));
+    return access ? send(200, { ...access, role_name: access.permission }) : send(404, { message: 'Not Found' });
+  }
   if (call === 'POST /issues') {
     // Recognised by its bot author alone, in case GitHub leaves performed_via_github_app empty.
     repo.issues.push(fakeIssue(name, repo.issues.length + 1, { title: body.title, body: body.body, user: { login: BOT } }));
@@ -102,6 +126,8 @@ const fake = createServer(async (req, res) => {
 });
 
 let app: FastifyInstance;
+/** The same API with AUTH_MODE=github: sessions are shared, as both use the one database. */
+let ghApp: FastifyInstance;
 let webhooks: FastifyInstance;
 let gh: GitHubClient;
 let config: GitHubConfig;
@@ -114,21 +140,23 @@ before(async () => {
     privateKey: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey,
     webhookSecret: SECRET,
     apiUrl: `http://127.0.0.1:${(fake.address() as AddressInfo).port}`,
+    webUrl: `http://127.0.0.1:${(fake.address() as AddressInfo).port}`,
   };
   gh = gitHubClient(config);
   app = await buildApp({ pool, authMode: 'dev', github: gh });
+  ghApp = await buildApp({ pool, authMode: 'github', github: gh });
   webhooks = await buildWebhookApp({ pool, github: config });
 });
 after(async () => {
-  await Promise.all([app.close(), webhooks.close(), new Promise((resolve) => fake.close(resolve))]);
+  await Promise.all([app.close(), ghApp.close(), webhooks.close(), new Promise((resolve) => fake.close(resolve))]);
   await pool.end();
 });
 
 // ---- Helpers ----
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
-const as = (token: string) => (method: Method, url: string, payload?: object) =>
-  app.inject({ method, url, payload, headers: { authorization: `Bearer ${token}` } });
+const as = (token: string, on = app) => (method: Method, url: string, payload?: object) =>
+  on.inject({ method, url, payload, headers: { authorization: `Bearer ${token}` } });
 type Api = ReturnType<typeof as>;
 
 async function user() {
@@ -137,8 +165,8 @@ async function user() {
 }
 
 /** A board on a repository of its own (the fake has it installed unless told otherwise), with a worker. */
-async function fixture({ installed = true } = {}) {
-  const api = await user();
+async function fixture({ installed = true, api = undefined as Api | undefined } = {}) {
+  api ??= await user();
   const repository = `acme/gh-${randomUUID().slice(0, 8)}`;
   const ws = (await api('POST', '/workspaces', { name: 'Acme' })).json();
   const board = (await api('POST', `/workspaces/${ws.id}/boards`, { name: 'Roadmap' })).json();
@@ -701,4 +729,143 @@ test('a pull request that closes an imported issue links to its card', async () 
   await syncOnce(pool, gh);
   assert.deepEqual((await f.api('GET', `/tasks/${task.id}/github`)).json().prs.map((p: { number: number }) => p.number), [5]);
   assert.equal((await card(f.api, f.board.id, task.id)).prs, 1);
+});
+
+// ---- Signing in with GitHub (AUTH_MODE=github) ----
+
+const ghUser = (login: string, name: string | null = null) => ({ id: randomInt(1, 2 ** 47), login, name });
+const device = async () => {
+  const res = await ghApp.inject({ method: 'POST', url: '/auth/github/device' });
+  assert.equal(res.statusCode, 200, res.body);
+  return res.json().deviceCode as string;
+};
+const poll = (deviceCode: string) => ghApp.inject({ method: 'POST', url: '/auth/github/token', payload: { deviceCode } });
+/** Signs in on ghApp as GitHub user `me`; returns the API's answer. */
+async function signIn(me: { id: number; login: string; name: string | null }) {
+  const code = await device();
+  tokenUsers.set(`gho_${code}`, me);
+  devices.set(code, [{ access_token: `gho_${code}`, token_type: 'bearer', scope: '' }]);
+  const res = await poll(code);
+  assert.equal(res.statusCode, 200, res.body);
+  return res.json() as { token: string; user: { id: string; login: string; displayName: string } };
+}
+const githubIdOf = async (userId: string) => (await pool.query('SELECT github_id FROM users WHERE id = $1', [userId])).rows[0].github_id;
+
+test('GitHub sign-in: pending, slow_down, then a user and a session; a spent code is 400; other refusals 502', async () => {
+  assert.deepEqual((await ghApp.inject({ method: 'GET', url: '/health' })).json(), { ok: true, auth: 'github' });
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/health' })).json(), { ok: true, auth: 'dev' });
+  assert.equal((await ghApp.inject({ method: 'POST', url: '/auth/dev-login', payload: { login: 'x' } })).statusCode, 401, 'no dev login (not a public route)');
+
+  const res = await ghApp.inject({ method: 'POST', url: '/auth/github/device' });
+  const started = res.json();
+  assert.deepEqual({ ...started, deviceCode: typeof started.deviceCode }, {
+    deviceCode: 'string', userCode: 'WDJB-MJHT', verificationUri: `${config.webUrl}/login/device`, interval: 5, expiresIn: 900,
+  });
+  const me = ghUser(`Octo-${randomUUID().slice(0, 8)}`, 'Mona Octo');
+  tokenUsers.set('gho_one', me);
+  devices.set(started.deviceCode, [{ error: 'authorization_pending' }, { error: 'slow_down', interval: 10 }, { access_token: 'gho_one' }]);
+  for (const interval of [5, 10]) {
+    const pending = await poll(started.deviceCode);
+    assert.deepEqual([pending.statusCode, pending.json()], [202, { pending: true, interval }]);
+  }
+  const done = await poll(started.deviceCode);
+  assert.equal(done.statusCode, 200, done.body);
+  const { token, user } = done.json();
+  assert.deepEqual({ login: user.login, displayName: user.displayName }, { login: me.login.toLowerCase(), displayName: 'Mona Octo' });
+  assert.deepEqual((await as(token, ghApp)('GET', '/me')).json(), user, 'a working session');
+  assert.equal(await githubIdOf(user.id), String(me.id));
+  assert.equal((await signIn(me)).user.id, user.id, 'the same user next time');
+
+  for (const [error, status] of [['expired_token', 400], ['token_expired', 400], ['access_denied', 400], ['device_flow_disabled', 502]] as const) {
+    const code = await device();
+    devices.set(code, [{ error }]);
+    assert.equal((await poll(code)).statusCode, status, error);
+  }
+  assert.equal((await poll('never-issued')).statusCode, 400);
+  await assert.rejects(buildApp({ pool, authMode: 'github' }), /needs the GitHub App/);
+});
+
+test('GitHub sign-in never takes over a dev account; dev sessions and workers are refused in github mode; a renamed login moves aside', async () => {
+  const login = `u-${randomUUID().slice(0, 8)}`;
+  const { token: devToken, user: devUser } = (await app.inject({ method: 'POST', url: '/auth/dev-login', payload: { login } })).json();
+  const dev = as(devToken);
+  const devWorker = await pairWorker(dev);
+  const signedIn = await signIn(ghUser(login.toUpperCase()));
+  assert.notEqual(signedIn.user.id, devUser.id, 'a fresh account');
+  assert.equal(signedIn.user.login, login);
+  assert.equal((await dev('GET', '/me')).json().login, `~${devUser.id}`, 'the dev account moved aside');
+  for (const [token, url] of [[devToken, '/me'], [devWorker.token, '/worker/me']]) {
+    const res = await ghApp.inject({ method: 'GET', url, headers: { authorization: `Bearer ${token}` } });
+    assert.deepEqual([res.statusCode, res.json().message], [401, 'Sign in with GitHub'], url);
+  }
+  const again = await app.inject({ method: 'POST', url: '/auth/dev-login', payload: { login } });
+  assert.equal(again.statusCode, 409, 'no dev session for a GitHub-linked login');
+  const worker = await pairWorker(as(signedIn.token, ghApp));
+  assert.equal((await as(worker.token, ghApp)('GET', '/worker/me')).statusCode, 200, "a GitHub user's worker works");
+
+  // B signs in as `old`, renames on GitHub to `now`; C then takes `old`.
+  const old = `old-${randomUUID().slice(0, 8)}`;
+  const b = ghUser(old);
+  const first = await signIn(b);
+  const c = await signIn(ghUser(old));
+  assert.notEqual(c.user.id, first.user.id);
+  assert.equal(c.user.login, old);
+  assert.equal((await as(first.token, ghApp)('GET', '/me')).json().login, `~${first.user.id}`, 'moved aside until B signs in again');
+  const now = `new-${randomUUID().slice(0, 8)}`;
+  const renamed = await signIn({ ...b, login: now });
+  assert.deepEqual([renamed.user.id, renamed.user.login], [first.user.id, now]);
+});
+
+test("a user's rate-limited token doesn't pause the app's own GitHub traffic", async () => {
+  const f = await fixture();
+  const client = gitHubClient(config);
+  await assert.rejects(client.user('gho_limited'), (e: GitHubError) => e.retryable);
+  assert.deepEqual(await client.app(f.repository), { id: APP_ID, slug: 'ai-kanban-test' }, 'the installation call still goes out');
+});
+
+test('github mode: repository actions need write access on GitHub and the app installed there; dev mode skips the check', async () => {
+  // A GitHub user; the setup goes through the dev API (no gate) with the same session, as both apps share the database.
+  const me = ghUser(`gh-${randomUUID().slice(0, 8)}`);
+  const { token } = await signIn(me);
+  const f = await fixture({ api: as(token) });
+  const filed = await approved(f);
+  const { specId } = await refined(f);
+  opened(f);
+  opened(f);
+  const importedTask = await imported(f, 1);
+  const login = me.login;
+  const g = as(token, ghApp);
+  f.repo.access = new Map();
+
+  const gated = () => [
+    g('PATCH', `/boards/${f.board.id}`, { repository: f.repository }),
+    g('GET', `/boards/${f.board.id}/github/issues`),
+    g('POST', `/boards/${f.board.id}/github/import`, { number: 2 }),
+    g('POST', `/specs/${specId}/approve`),
+    g('POST', `/tasks/${filed.id}/github/retry`),
+    g('POST', `/tasks/${importedTask.id}/github/comment/retry`),
+  ];
+  const statuses = async () => (await Promise.all(gated())).map((r) => r.statusCode);
+  const denied = await g('PATCH', `/boards/${f.board.id}`, { repository: f.repository });
+  assert.deepEqual([denied.statusCode, denied.json().message], [403, `You need write access to ${f.repository} on GitHub, with the GitHub App installed there`]);
+  assert.deepEqual(await statuses(), [403, 403, 403, 403, 403, 403], 'not a collaborator');
+  f.repo.access.set(login, { permission: 'read', user: { id: me.id } });
+  assert.deepEqual(await statuses(), [403, 403, 403, 403, 403, 403], 'read only');
+  f.repo.access.set(login, { permission: 'write', user: { id: me.id + 1 } });
+  assert.deepEqual(await statuses(), [403, 403, 403, 403, 403, 403], 'the login is someone else now');
+  assert.equal((await pool.query('SELECT approved_at FROM specs WHERE id = $1', [specId])).rows[0].approved_at, null);
+
+  const nowhere = `acme/none-${randomUUID().slice(0, 8)}`;
+  const missing = await g('PATCH', `/boards/${f.board.id}`, { repository: nowhere });
+  assert.deepEqual([missing.statusCode, missing.json().message], [403, `You need write access to ${nowhere} on GitHub, with the GitHub App installed there`], 'not installed: the same answer');
+
+  f.repo.access.set(login, { permission: 'write', user: { id: me.id } });
+  // Comment retry passes the check and then finds no comment to post (nothing approved on that card yet).
+  assert.deepEqual(await statuses(), [200, 200, 201, 200, 200, 409]);
+  f.repo.access.set(login, { permission: 'admin', user: { id: me.id } });
+  assert.equal((await g('GET', `/boards/${f.board.id}/github/issues`)).statusCode, 200, 'admin');
+  assert.equal((await g('PATCH', `/boards/${f.board.id}`, { name: 'Renamed' })).statusCode, 200);
+  f.repo.access.clear();
+  assert.equal((await g('PATCH', `/boards/${f.board.id}`, { repository: null })).statusCode, 200, 'disconnecting needs no access');
+  assert.equal((await f.api('PATCH', `/boards/${f.board.id}`, { repository: f.repository })).statusCode, 200, 'dev mode: no check');
 });

@@ -9,6 +9,8 @@ export interface GitHubConfig {
   privateKey: KeyObject;
   webhookSecret: string;
   apiUrl: string;
+  /** github.com itself (GITHUB_WEB_URL), for the sign-in Device Flow. */
+  webUrl: string;
 }
 
 /** Reads the app's settings from the environment; `missing` names what's absent when sync can't run. */
@@ -22,6 +24,7 @@ export function githubConfigFromEnv(env = process.env): { config?: GitHubConfig;
       privateKey: createPrivateKey(readFileSync(env.GITHUB_APP_PRIVATE_KEY_PATH!)),
       webhookSecret: env.GITHUB_WEBHOOK_SECRET!,
       apiUrl: (env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/$/, ''),
+      webUrl: (env.GITHUB_WEB_URL ?? 'https://github.com').replace(/\/$/, ''),
     },
   };
 }
@@ -62,8 +65,9 @@ export function gitHubClient(config: GitHubConfig) {
   // ponytail: one pause for the whole app, not per installation; fine while it's installed on a handful of repositories.
   let pausedUntil = 0; // after a rate limit, no request at all until GitHub's reset (GitHub may ban clients that keep going)
 
-  async function call(method: string, path: string, auth: string, body?: object) {
-    if (Date.now() < pausedUntil) throw new GitHubError(429, 'GitHub rate limit: waiting for it to reset', true, pausedUntil - Date.now());
+  /** `shared: false` for a user's own token: its rate limit is theirs, so it neither waits for nor sets the app's pause. */
+  async function call(method: string, path: string, auth: string, body?: object, { shared = true } = {}) {
+    if (shared && Date.now() < pausedUntil) throw new GitHubError(429, 'GitHub rate limit: waiting for it to reset', true, pausedUntil - Date.now());
     let res: Response;
     try {
       res = await fetch(`${config.apiUrl}${path}`, {
@@ -87,7 +91,7 @@ export function gitHubClient(config: GitHubConfig) {
     // 403/429 with an exhausted or secondary rate limit is temporary; other 4xx won't fix themselves.
     const limited = res.status === 429 || (res.status === 403 && (res.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(text)));
     const wait = limited ? retryAfter(res.headers) : undefined;
-    if (wait) pausedUntil = Date.now() + wait;
+    if (wait && shared) pausedUntil = Date.now() + wait;
     throw new GitHubError(res.status, message, limited || res.status >= 500, wait);
   }
 
@@ -105,6 +109,23 @@ export function gitHubClient(config: GitHubConfig) {
     const entry = { token, expires: Date.parse(expires_at), appId: installation.app_id, appSlug: installation.app_slug };
     installations.set(repository, entry);
     return entry;
+  }
+
+  /** A Device Flow endpoint on github.com (no client secret). Its own errors come back as 200 with `error`. */
+  async function web(path: string, params: Record<string, string>) {
+    let res: Response;
+    try {
+      res = await fetch(`${config.webUrl}${path}?${new URLSearchParams({ client_id: config.clientId, ...params })}`, {
+        method: 'POST',
+        headers: { accept: 'application/json', 'user-agent': 'ai-kanban' },
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (e) {
+      throw new GitHubError(0, `GitHub unreachable: ${(e as Error).message}`, true);
+    }
+    const text = (await res.text().catch(() => '')).slice(0, 2000);
+    if (!res.ok) throw new GitHubError(res.status, `GitHub POST ${path}: ${res.status}`, res.status >= 500);
+    return (safeJson(text) ?? {}) as Record<string, string | number | undefined>;
   }
 
   /** A 401 means the cached token was revoked or expired early: fetch a new one and try once more. */
@@ -136,6 +157,13 @@ export function gitHubClient(config: GitHubConfig) {
       }
       return res.data as T;
     },
+    /** Starts a Device Flow sign-in: GitHub's device_code, user_code, verification_uri, interval, expires_in (or error). */
+    deviceCode: () => web('/login/device/code', {}),
+    /** Polls for the user's token: access_token, or error (authorization_pending, slow_down with interval, ...). */
+    deviceToken: (deviceCode: string) =>
+      web('/login/oauth/access_token', { device_code: deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }),
+    /** The user a (one-shot) user token belongs to. */
+    user: (token: string) => call('GET', '/user', token, undefined, { shared: false }) as Promise<{ id: number; login: string; name: string | null }>,
     /** The app's id and slug: issues it creates carry performed_via_github_app.id and the author `<slug>[bot]`. */
     async app(repository: string) {
       const { appId, appSlug } = await installation(repository);
