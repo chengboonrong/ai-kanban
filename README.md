@@ -36,7 +36,7 @@ left behind.
 
 | Board | Task with its history | Phone width |
 | --- | --- | --- |
-| <img src="docs/media/board.png" alt="Board with Backlog, Todo, In Progress and Done columns" width="380"> | <img src="docs/media/task-detail.png" alt="Task page with title, column, description and an activity list" width="380"> | <img src="docs/media/board-phone.png" alt="The same board at phone width, one column at a time" width="150"> |
+| <img src="docs/media/board.png" alt="Board with a status strip (repository, tasks, ready for review, waiting) over Backlog, Todo, In Progress and Done columns" width="380"> | <img src="docs/media/task-detail.png" alt="Task page with title, column, description and an activity list" width="380"> | <img src="docs/media/board-phone.png" alt="The same board at phone width, one column at a time" width="150"> |
 
 ### AI refinement (Milestone 3)
 
@@ -45,11 +45,11 @@ showing its spec. The run progress and spec here are sample data posted by a tes
 
 | Board with refinement status | Run in progress | Spec ready for review |
 | --- | --- | --- |
-| <img src="docs/media/refine-board.png" alt="Board linked to acme/mobile-app; cards show Waiting for a worker, Refining, Spec ready for review, Spec approved and Refinement failed" width="380"> | <img src="docs/media/refine-running.png" alt="Task page with a progress bar, a Cancel button and the agent's latest reads and searches" width="380"> | <img src="docs/media/refine-spec.png" alt="Spec with title, version and commit, summary, readiness 72% and acceptance criteria" width="380"> |
+| <img src="docs/media/refine-board.png" alt="Board linked to acme/mobile-app; cards show a failed refinement, Spec ready for review, a task waiting for a worker, Spec approved with its GitHub issue, and a refinement in progress" width="380"> | <img src="docs/media/refine-running.png" alt="Task page with the run on the status strip, the lifecycle at reading, the agent's latest reads and searches, and a Cancel button" width="380"> | <img src="docs/media/refine-spec.png" alt="Spec ready for review: status strip with run, readiness 72%, evidence and refiner, the lifecycle at spec ready, then summary and requirements with MUST and SHOULD marked" width="380"> |
 
 | Evidence and approval | Failed run | Spec at phone width |
 | --- | --- | --- |
-| <img src="docs/media/refine-evidence.png" alt="Requirements, open questions, suggested approach, evidence lines with verified and unverified marks, and an Approve spec button" width="380"> | <img src="docs/media/refine-failed.png" alt="The last refinement failed, with the error and a Refine with AI button" width="380"> | <img src="docs/media/refine-spec-phone.png" alt="The spec view at phone width" width="150"> |
+| <img src="docs/media/refine-evidence.png" alt="Open questions to answer, suggested approach, evidence lines with verified and unverified marks, a comment action on each item, and the Approve spec and Refine again buttons" width="380"> | <img src="docs/media/refine-failed.png" alt="The last refinement failed, with the error and a Refine with AI button" width="380"> | <img src="docs/media/refine-spec-phone.png" alt="The spec view at phone width" width="150"> |
 
 ## Surfaces
 
