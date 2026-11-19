@@ -717,6 +717,50 @@ async function changedSince<T extends { updated_at: string }>(gh: GitHubClient, 
   }
 }
 
+// ponytail: each read counts against the installation's 5,000 requests an hour, shared by every repository and by the pause a rate
+// limit sets for the whole app; 10 a sweep is about 60 an hour per repository. Upgrade path: conditional requests (ETag / If-None-Match).
+const TRACKED_CHECKS = 10;
+const GONE = "the issue was deleted or moved to a repository the app can't read";
+
+/**
+ * Reads the least recently checked tracked issues one by one, marking a deleted or transferred one as its webhook does.
+ * No transaction spans a GitHub call. A 404 or 410 only counts once the repository itself reads fine, is the same one and has
+ * issues enabled; any other failure fails the sweep, and what was marked before it stays.
+ */
+async function checkTracked(pool: pg.Pool, gh: GitHubClient, { repository, repository_id: repositoryId }: RepoJob) {
+  const home = async () => {
+    const r = await gh.request<{ id: number; full_name: string; has_issues?: boolean }>(repository, 'GET', `/repos/${repository}`);
+    if (String(r.id) !== String(repositoryId) || !r.has_issues) {
+      throw new GitHubError(0, `${repository} is not the repository the issues were filed in, or has issues disabled`, false);
+    }
+    return r;
+  };
+  // Not the ones that became 'created' minutes ago: GitHub may not serve them yet. Stamped before the read, so a failing one
+  // doesn't stay first. Rows a deletion is cascading are skipped, not waited for.
+  const { rows } = await pool.query(
+    `UPDATE github_issues SET checked_at = now() WHERE (repository_id, number) IN (
+       SELECT repository_id, number FROM github_issues
+       WHERE repository_id = $1 AND state = 'created' AND last_error IS NULL AND updated_at < now() - interval '5 minutes'
+       ORDER BY checked_at NULLS FIRST, number LIMIT $2 FOR UPDATE SKIP LOCKED) RETURNING number`,
+    [repositoryId, TRACKED_CHECKS],
+  );
+  if (!rows.length) return;
+  const { full_name: name } = await home();
+  for (const { number } of rows) {
+    // fetch follows a transferred issue's redirect, so the answer names the repository it is in now.
+    let gone: [string, string | null] | undefined;
+    try {
+      const issue = await gh.request<Issue>(repository, 'GET', `/repos/${repository}/issues/${number}`);
+      if (!issue.repository_url?.toLowerCase().endsWith(`/repos/${name.toLowerCase()}`)) gone = ISSUE_EVENT.transferred;
+    } catch (e) {
+      if (!(e instanceof GitHubError && (e.status === 404 || e.status === 410))) throw e;
+      await home(); // a 404 is also what losing access answers: only a readable repository makes it the issue's
+      gone = e.status === 410 ? ISSUE_EVENT.deleted : ['closed', GONE];
+    }
+    if (gone) await setIssueState(pool, repositoryId, number, ...gone, new Date().toISOString());
+  }
+}
+
 async function sweep(pool: pg.Pool, gh: GitHubClient, job: RepoJob) {
   const { repository, repository_id: repositoryId, since } = job;
   try {
@@ -725,7 +769,7 @@ async function sweep(pool: pg.Pool, gh: GitHubClient, job: RepoJob) {
     for (const pr of prs.items) await upsertPullRequest(pool, repositoryId, repository, pr, { onlyNewer: true });
     // CI and reviews don't reliably move a PR's updated_at: every open PR on a card is read again.
     await bump(pool, repositoryId, 'state = $2 AND id IN (SELECT pull_request_id FROM pull_request_tasks)', 'open');
-    // Deleted and transferred issues aren't listed in this repository any more; those stay webhook-only.
+    // Deleted and transferred issues aren't listed in this repository any more: tracked ones are read directly, a few per sweep.
     const issues = await changedSince<Issue>(
       gh,
       repository,
@@ -738,6 +782,7 @@ async function sweep(pool: pg.Pool, gh: GitHubClient, job: RepoJob) {
       // Strictly newer only: a deleted or transferred event at the same instant keeps its note.
       if (!i.pull_request && tracked.has(i.number)) await setIssueState(pool, repositoryId, i.number, i.state, null, i.updated_at, { strictlyNewer: true });
     }
+    await checkTracked(pool, gh, job);
     const capped = [prs.capped && 'pull requests', issues.capped && 'issues'].filter(Boolean);
     // A straggling sweep from a lapsed lease never moves the cursor back.
     await pool.query(

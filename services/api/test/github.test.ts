@@ -28,7 +28,7 @@ type Failure = { match: string; status?: number; headers?: Record<string, string
 /** A pull request as the REST list returns it (`prs` holds what GraphQL answers). */
 type FakePull = { number: number; title: string; html_url: string; user: { login: string }; state: 'open' | 'closed'; merged_at: string | null;
   draft: boolean; head: { sha: string; ref: string }; updated_at: string };
-type FakeRepo = { id: number; issues: FakeIssue[]; comments: FakeComment[]; prs: Map<number, object>; pulls: FakePull[]; failures: Failure[];
+type FakeRepo = { id: number; issues: FakeIssue[]; comments: FakeComment[]; prs: Map<number, object>; pulls: FakePull[]; failures: Failure[]; fullName?: string;
   onGraphql?: (n: number) => Promise<void>; access?: Map<string, { permission: string; user: { id: number } }> };
 const repos = new Map<string, FakeRepo>();
 // Device Flow: each device code's answers to the token poll, in order (the last one repeats); the user each token belongs to.
@@ -97,7 +97,7 @@ const fake = createServer(async (req, res) => {
   if (failure?.status) return send(failure.status, { message: `injected ${failure.status}` }, failure.headers);
 
   if (call === 'GET /installation') return send(200, { id: 1, app_id: APP_ID, app_slug: 'ai-kanban-test' });
-  if (call === 'GET /') return send(200, { id: repo.id, full_name: name });
+  if (call === 'GET /') return send(200, { id: repo.id, full_name: repo.fullName ?? name, has_issues: true });
   const collaborator = /^GET \/collaborators\/([^/]+)\/permission$/.exec(call)?.[1];
   if (collaborator) {
     const access = repo.access?.get(decodeURIComponent(collaborator));
@@ -112,7 +112,10 @@ const fake = createServer(async (req, res) => {
   if (call === 'GET /issues') {
     const since = url.searchParams.get('since') ?? '';
     const key = url.searchParams.get('sort') === 'updated' ? 'updated_at' : 'created_at';
-    const sorted = repo.issues.filter((i) => i.updated_at >= since).sort((a, b) => b[key].localeCompare(a[key]));
+    // A transferred issue isn't listed.
+    const sorted = repo.issues
+      .filter((i) => i.updated_at >= since && i.repository_url.endsWith(`/repos/${name}`))
+      .sort((a, b) => b[key].localeCompare(a[key]));
     return send(200, pageOf(sorted, url));
   }
   if (call === 'GET /pulls') return send(200, pageOf([...repo.pulls].sort((a, b) => b.updated_at.localeCompare(a.updated_at)), url));
@@ -798,6 +801,88 @@ test('a sweep finds what webhooks missed: a new PR, CI on a linked PR, a closed 
   await sweepDue(f);
   await syncOnce(pool, gh);
   assert.deepEqual([(await row(task.id)).issue_state, (await row(task.id)).last_error], ['closed', 'the issue was deleted on GitHub']);
+});
+
+/** Cards that became 'created' a while ago: the sweep leaves the ones from the last minutes alone. */
+const aged = (f: Fixture) => pool.query(`UPDATE github_issues SET updated_at = now() - interval '1 hour' WHERE repository_id = $1`, [f.repo.id]);
+const noted = async (t: { id: string }) => [(await row(t.id)).issue_state, (await row(t.id)).last_error];
+/** One tracked, aged issue on a swept repository. */
+async function tracked() {
+  const f = await fixture();
+  opened(f);
+  const task = await imported(f);
+  await syncOnce(pool, gh);
+  await aged(f);
+  await sweepDue(f);
+  return { f, task };
+}
+
+test('a sweep marks a tracked issue deleted or transferred on GitHub, as the webhooks would', async () => {
+  const f = await fixture();
+  for (let n = 1; n <= 3; n++) opened(f);
+  const [gone, moved, kept] = [await imported(f, 1), await imported(f, 2), await imported(f, 3)];
+  await syncOnce(pool, gh);
+  await aged(f);
+  f.repo.issues.splice(0, 1); // #1 gone: the repository reads fine, the issue answers 410
+  f.repo.failures.push({ match: 'GET /issues/1', status: 410 });
+  f.repo.issues[0].repository_url = `${config.apiUrl}/repos/acme/elsewhere`; // #2 transferred
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  assert.deepEqual(await noted(gone), ['closed', 'the issue was deleted on GitHub']);
+  assert.deepEqual(await noted(moved), ['closed', 'the issue was transferred to another repository']);
+  assert.deepEqual(await noted(kept), ['open', null]);
+  assert.equal((await sweepRow(f)).last_error, null);
+});
+
+test('a 404 on the issue, with the repository readable, is marked deleted or moved out of reach', async () => {
+  const { f, task } = await tracked();
+  f.repo.issues.length = 0;
+  await syncOnce(pool, gh);
+  assert.deepEqual(await noted(task), ['closed', "the issue was deleted or moved to a repository the app can't read"]);
+});
+
+test('losing access mid-sweep fails the sweep and marks nothing deleted', async () => {
+  const { f, task } = await tracked();
+  f.repo.issues.length = 0;
+  // The repository reads at the start, then the issue and the repository both answer 404.
+  f.repo.failures.push({ match: 'GET /', wait: Promise.resolve() }, { match: 'GET /', status: 404 });
+  await syncOnce(pool, gh);
+  assert.deepEqual(await noted(task), ['open', null]);
+  assert.match((await sweepRow(f)).last_error, /GET \/repos\/acme\/gh-[0-9a-f]+: 404 injected 404/);
+});
+
+test('a renamed repository does not turn its issues into transferred ones', async () => {
+  const { f, task } = await tracked();
+  f.repo.fullName = 'Acme/Renamed'; // the issue read follows the redirect and names the new repository
+  f.repo.issues[0].repository_url = `${config.apiUrl}/repos/acme/renamed`;
+  await syncOnce(pool, gh);
+  assert.deepEqual(await noted(task), ['open', null]);
+  assert.equal((await sweepRow(f)).last_error, null);
+});
+
+test('a repository-level 404 (the app is not installed) fails the sweep and marks nothing deleted', async () => {
+  const { f, task } = await tracked();
+  repos.delete(f.repository);
+  await syncOnce(pool, gh);
+  assert.deepEqual(await noted(task), ['open', null]);
+  assert.match((await sweepRow(f)).last_error, /GitHub GET \/repos\/acme\/gh-[0-9a-f]+\/pulls: 404/);
+});
+
+test('a sweep checks at most 10 tracked issues per repository, the least recently checked first, and not new ones', async () => {
+  const f = await fixture();
+  for (let n = 1; n <= 12; n++) opened(f);
+  for (let n = 1; n <= 12; n++) await imported(f, n);
+  await syncOnce(pool, gh);
+  const unchecked = async () =>
+    (await pool.query('SELECT number FROM github_issues WHERE repository_id = $1 AND checked_at IS NULL ORDER BY number', [f.repo.id])).rows.map((r) => r.number);
+  assert.equal((await unchecked()).length, 12, 'filed minutes ago: not read yet');
+  await aged(f);
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  assert.deepEqual(await unchecked(), [11, 12]);
+  await sweepDue(f);
+  await syncOnce(pool, gh);
+  assert.deepEqual(await unchecked(), [], 'the two left out the first time are read next');
 });
 
 test("a failed sweep keeps its cursor; a concurrent pass doesn't sweep the same repository; paging stops at the cursor", async () => {
