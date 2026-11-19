@@ -12,10 +12,17 @@ class User {
 }
 
 class BoardRef {
-  BoardRef({required this.id, required this.name});
-  factory BoardRef.fromJson(Map<String, dynamic> j) =>
-      BoardRef(id: j['id'], name: j['name']);
+  BoardRef({required this.id, required this.name, this.specsReady = 0});
+  factory BoardRef.fromJson(Map<String, dynamic> j) => BoardRef(
+    id: j['id'],
+    name: j['name'],
+    specsReady:
+        j['specsReady'] ?? 0, // absent from copies saved before the API sent it
+  );
   final String id, name;
+
+  /// Cards whose newest spec waits for review (the board's "ready" state).
+  final int specsReady;
 }
 
 class Workspace {

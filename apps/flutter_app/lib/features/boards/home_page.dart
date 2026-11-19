@@ -33,6 +33,12 @@ class HomePage extends ConsumerWidget {
         .value
         ?.where((w) => w.state != 'offline')
         .length;
+    // Specs waiting for review on every board; hidden on a saved offline copy, which could be stale.
+    final ready = switch (workspaces.value) {
+      final v? when !v.offline =>
+        v.items.expand((w) => w.boards).fold(0, (n, b) => n + b.specsReady),
+      _ => null,
+    };
     final api = ref.read(apiProvider);
 
     Future<void> newWorkspace() async {
@@ -119,7 +125,7 @@ class HomePage extends ConsumerWidget {
         AsyncValue(:final value?) => ListView(
           padding: EdgeInsets.fromLTRB(side, 24, side, 48),
           children: [
-            if (online != null || unsent > 0 || value.offline)
+            if (online != null || unsent > 0 || value.offline || ready != null)
               Align(
                 alignment: Alignment.centerLeft,
                 child: ScreenStrip(
@@ -131,6 +137,17 @@ class HomePage extends ConsumerWidget {
                         value: '$online online',
                         color: online > 0 ? t.screenGreen : t.screenMuted,
                         motion: online > 0
+                            ? GlyphMotion.once
+                            : GlyphMotion.still,
+                      ),
+                    // The same cell as the board strip's, summed.
+                    if (ready != null)
+                      ScreenCell(
+                        glyph: Glyph.spec,
+                        label: 'ready for review',
+                        value: '$ready',
+                        color: ready > 0 ? t.screenAccent : t.screenMuted,
+                        motion: ready > 0
                             ? GlyphMotion.once
                             : GlyphMotion.still,
                       ),

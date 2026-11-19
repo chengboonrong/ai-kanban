@@ -58,6 +58,10 @@ const done = (s = spec()) => ({ model: 'opencode/deepseek-v4.1-flash-free', sess
 const refinementOf = async (api: ReturnType<typeof as>, boardId: string, taskId: string) =>
   (await api('GET', `/boards/${boardId}`)).json().columns.flatMap((c: { tasks: object[] }) => c.tasks).find((t: { id: string }) => t.id === taskId)
     .refinement;
+// What the home screen counts: the board's specs waiting for review.
+const specsReady = async (api: ReturnType<typeof as>, boardId: string) =>
+  (await api('GET', '/workspaces')).json().flatMap((w: { boards: object[] }) => w.boards).find((b: { id: string }) => b.id === boardId)
+    .specsReady;
 
 test('worker tokens and user sessions are not interchangeable, and deleting a worker revokes it', async () => {
   const api = await user();
@@ -125,12 +129,14 @@ test('a run streams events, stores a validated spec version, and the latest vers
   const again = await worker('POST', `/worker/runs/${run.id}/complete`, done());
   assert.deepEqual([again.statusCode, again.json().id, again.json().version], [200, v1.id, 1], 'a repeated completion adds nothing');
   assert.equal(await refinementOf(api, board.id, task.id), 'ready');
+  assert.equal(await specsReady(api, board.id), 1);
   const lastId = polled.events.at(-1).id;
   const final = (await api('GET', `/runs/${run.id}/events?after=${lastId}`)).json();
   assert.deepEqual(final, { state: 'succeeded', events: [] }, 'a finished run answers at once instead of waiting');
 
   // Refine again: a second version supersedes the first.
   assert.equal((await api('POST', `/tasks/${task.id}/runs`)).statusCode, 201);
+  assert.equal(await specsReady(api, board.id), 0, 'a spec being rewritten is not ready');
   const run2 = (await worker('POST', '/worker/claim', { repositories: [repository] })).json();
   const v2 = (await worker('POST', `/worker/runs/${run2.id}/complete`, done(spec('Add GitHub sign-in')))).json();
   assert.equal(v2.version, 2);
@@ -139,6 +145,7 @@ test('a run streams events, stores a validated spec version, and the latest vers
   assert.equal(approved.statusCode, 200);
   assert.ok(approved.json().approvedAt);
   assert.equal(await refinementOf(api, board.id, task.id), 'approved');
+  assert.equal(await specsReady(api, board.id), 0);
 
   const refinement = (await api('GET', `/tasks/${task.id}/refinement`)).json();
   assert.equal(refinement.spec.content.title, 'Add GitHub sign-in');
