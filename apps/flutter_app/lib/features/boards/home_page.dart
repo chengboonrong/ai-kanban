@@ -54,15 +54,14 @@ class HomePage extends ConsumerWidget {
     final quiet = theme.textTheme.bodyMedium?.copyWith(color: t.muted);
     // Cap the ledger at 880px and centre it; the app bar shares the same inset.
     // Padding (not a box) keeps the whole window scrollable.
-    final side = ((MediaQuery.sizeOf(context).width - 880) / 2).clamp(
-      16.0,
-      double.infinity,
-    );
+    final side = ledgerInset(context);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Workspaces'),
-        titleSpacing: side,
+        leading: const SizedBox.shrink(),
+        leadingWidth: side,
+        titleSpacing: 0,
         actions: [
           IconButton(
             tooltip: 'Workers',

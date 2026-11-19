@@ -246,9 +246,9 @@ A neutral grey shell with four functional key colours and a black instrument scr
 
 ## Layout
 
-The task page is the reference composition. At 1100px and wider it is a spec column (max 900px, prose at 680px) beside a fixed 360px activity rail on the side field; below 1100px the rail stacks under the spec. Spec actions sit in a bar pinned under the spec column with a top seam. The app bar is 56px with a round back key, a title and a mono repo name.
+The task page is the reference composition. At 1000px and wider (a landscape tablet included) it is a spec column (max 900px, prose at 680px) centred in the space beside a fixed 360px activity rail on the side field; below 1000px the rail stacks under the spec. Save and Delete sit on their own quiet row under the brief, so the title keeps the column's width. Spec actions sit in a bar pinned under the spec column; its top seam runs the full width beside the rail and its buttons line up with the column. The app bar is 56px with a round back key, a title and a mono repo name; it stays at the window edge as the board's navigation rather than following the centred column.
 
-Home and Workers centre an 880px column with side padding that grows with the window. Board lanes are 288px wide, or 85% of the screen under 600px, so the next lane peeks in. Spacing runs on 4/8/12/16/20/24/48; the screen strip uses 20px horizontal by 16px vertical padding, 28px between cells and 14px between rows. Prose rows separate with 8px vertical padding over a bottom seam. Every layout works at a 360px phone width.
+Home and Workers centre an 880px column with side padding that grows with the window; the app bar title (and Workers' back key) sit on the same inset once it is wider than the 56px back key (from 992px); narrower, the Workers title follows its back key. Board lanes share the window from 288px (then the board scrolls) up to 360px, or take 85% of the screen under 600px so the next lane peeks in. Spacing runs on 4/8/12/16/20/24/48; the screen strip uses 20px horizontal by 16px vertical padding, 28px between cells and 14px between rows. Prose rows separate with 8px vertical padding over a bottom seam. Every layout works at a 360px phone width.
 
 ## Elevation & Depth
 

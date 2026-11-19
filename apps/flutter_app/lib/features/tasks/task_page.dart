@@ -146,13 +146,17 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= _wide;
         final gutter = wide ? 48.0 : 16.0;
-        // The spec column: capped, left-aligned, the same gutter for the document and its pinned bar.
-        Widget measured(Widget child, {EdgeInsets? padding}) => Align(
-          alignment: Alignment.topLeft,
+        // The spec column: capped and centred in the space beside the rail. The pinned bar spans that space,
+        // its seam edge to edge, and indents its buttons to the column's edge.
+        final room = constraints.maxWidth - (wide ? _rail : 0);
+        final indent =
+            (room - _column).clamp(0.0, double.infinity) / 2 + gutter;
+        Widget measured(Widget child) => Align(
+          alignment: Alignment.topCenter,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 900),
+            constraints: const BoxConstraints(maxWidth: _column),
             child: Padding(
-              padding: padding ?? EdgeInsets.symmetric(horizontal: gutter),
+              padding: EdgeInsets.symmetric(horizontal: gutter),
               child: child,
             ),
           ),
@@ -205,12 +209,6 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Wide: Save and Delete join the title row so the brief runs straight into the strip.
-                if (wide)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: edits),
-                  ),
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: _ColumnTag(
@@ -248,14 +246,23 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
                 ),
               ),
             ),
-            if (!wide) ...[
-              const SizedBox(height: 4),
-              // Narrow: Save at the column edge, the destructive Delete at the far end; both quiet.
-              Transform.translate(
-                offset: const Offset(-8, 0),
-                child: Row(children: [edits.first, const Spacer(), edits.last]),
-              ),
-            ],
+            const SizedBox(height: 4),
+            // Save at the column edge, the destructive Delete at the far end; both quiet, and off the title's row
+            // so the title keeps the column's width. Each is pulled out by its own padding so the labels sit on the
+            // column's edges, under the title and the column menu.
+            Row(
+              children: [
+                Transform.translate(
+                  offset: const Offset(-8, 0),
+                  child: edits.first,
+                ),
+                const Spacer(),
+                Transform.translate(
+                  offset: const Offset(8, 0),
+                  child: edits.last,
+                ),
+              ],
+            ),
             const SizedBox(height: 16),
             RefinementPanel(
               boardId: widget.boardId,
@@ -278,14 +285,11 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
                 child: measured(doc),
               ),
             ),
-            measured(
-              RefinementBar(
-                boardId: widget.boardId,
-                taskId: task.id,
-                repository: widget.repository,
-                padding: EdgeInsets.symmetric(horizontal: gutter, vertical: 12),
-              ),
-              padding: EdgeInsets.zero,
+            RefinementBar(
+              boardId: widget.boardId,
+              taskId: task.id,
+              repository: widget.repository,
+              padding: EdgeInsets.symmetric(horizontal: indent, vertical: 12),
             ),
           ],
         );
@@ -295,7 +299,7 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
           children: [
             Expanded(child: main),
             Container(
-              width: 360,
+              width: _rail,
               decoration: BoxDecoration(
                 color: t.paper3,
                 border: Border(left: t.hairline),
@@ -312,8 +316,12 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
   }
 }
 
-/// Wide enough for the spec column beside the 360px activity rail.
-const _wide = 1100.0;
+/// Wide enough for the spec column beside the activity rail (a landscape tablet included).
+const _wide = 1000.0;
+const _rail = 360.0;
+
+/// The spec column's cap, gutters included; prose inside keeps a 680px measure.
+const _column = 900.0;
 
 /// The task's column as a small pill; opening it moves the task to another column.
 class _ColumnTag extends StatelessWidget {
@@ -507,9 +515,10 @@ class _Skeleton extends StatelessWidget {
                 ? const EdgeInsets.fromLTRB(48, 32, 48, 0)
                 : const EdgeInsets.fromLTRB(16, 24, 16, 0),
             child: Align(
-              alignment: Alignment.topLeft,
+              alignment: Alignment.topCenter,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 804),
+                // The loaded column's content width (900 less its gutters), so nothing shifts as it loads.
+                constraints: BoxConstraints(maxWidth: wide ? 804 : 868),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -535,7 +544,7 @@ class _Skeleton extends StatelessWidget {
             children: [
               Expanded(child: doc),
               Container(
-                width: 360,
+                width: _rail,
                 padding: const EdgeInsets.all(32),
                 decoration: BoxDecoration(
                   color: t.paper3,
