@@ -252,9 +252,15 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
             // column's edges, under the title and the column menu.
             Row(
               children: [
-                Transform.translate(offset: const Offset(-8, 0), child: edits.first),
+                Transform.translate(
+                  offset: const Offset(-8, 0),
+                  child: edits.first,
+                ),
                 const Spacer(),
-                Transform.translate(offset: const Offset(8, 0), child: edits.last),
+                Transform.translate(
+                  offset: const Offset(8, 0),
+                  child: edits.last,
+                ),
               ],
             ),
             const SizedBox(height: 16),

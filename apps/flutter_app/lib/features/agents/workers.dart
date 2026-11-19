@@ -86,7 +86,10 @@ class WorkersPage extends ConsumerWidget {
         // content; narrower, the app bar's own back key keeps it where the other pages have it.
         leading: side < kToolbarHeight
             ? null
-            : const Align(alignment: Alignment.centerRight, child: BackButton()),
+            : const Align(
+                alignment: Alignment.centerRight,
+                child: BackButton(),
+              ),
         leadingWidth: side < kToolbarHeight ? null : side,
         titleSpacing: side < kToolbarHeight ? null : 0,
         actions: [
