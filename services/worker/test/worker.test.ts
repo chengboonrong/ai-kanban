@@ -26,7 +26,7 @@ import { promisify } from 'node:util';
 import type { OpencodeClient, Part } from '@opencode-ai/sdk/v2';
 import { claudeArgs, parseClaudeLine, refineWithClaude } from '../src/adapters/claude.ts';
 import { refineInOrca } from '../src/adapters/orca.ts';
-import { brief, refine, toolEvent } from '../src/adapters/opencode.ts';
+import { brief, REFINER_PERMISSION, refine, toolEvent } from '../src/adapters/opencode.ts';
 import { checkCheckout, escapingSymlinks, exportCommit, githubCheckouts, scrub, snapshot, verifyEvidence } from '../src/repository.ts';
 import { launchdPlist } from '../src/service.ts';
 
@@ -869,4 +869,12 @@ test('a spec the API failed to take (503 for 4 s, as while it restarts) is hande
     child.kill('SIGKILL');
     api.close();
   }
+});
+
+test('the OpenCode Refiner can submit its spec and nothing beyond reading', () => {
+  // OpenCode's rule: the last rule matching a tool decides; a tool left on the `*` deny is removed before the model sees it.
+  const rules = Object.entries(REFINER_PERMISSION);
+  const action = (tool: string) => rules.findLast(([k]) => k === '*' || k === tool)![1];
+  for (const tool of ['read', 'list', 'glob', 'grep', 'StructuredOutput']) assert.equal(action(tool), 'allow', tool);
+  for (const tool of ['bash', 'edit', 'write', 'webfetch', 'task', 'external_directory']) assert.equal(action(tool), 'deny', tool);
 });

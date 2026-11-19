@@ -16,6 +16,23 @@ fewer than 15), then answer. Cite only files you actually read, with line number
 Put open questions in ambiguities instead of guessing, and lower readiness when the brief leaves important decisions open.`;
 
 /**
+ * Deny by default; "ask" would hang a headless run. The agent works in an export of the commit (see exportCommit), so
+ * everything it can read is committed code, as on GitHub. OpenCode removes every tool whose last matching rule is the
+ * `*` deny before the model sees it, including StructuredOutput, the tool it adds for a `json_schema` prompt: without
+ * that allow the model can't hand in the spec, and since a tool call is then required every turn it reads forever.
+ * Order matters: later rules win.
+ */
+export const REFINER_PERMISSION = {
+  '*': 'deny',
+  read: 'allow',
+  list: 'allow',
+  glob: 'allow',
+  grep: 'allow',
+  StructuredOutput: 'allow',
+  external_directory: 'deny',
+} as const;
+
+/**
  * Starts a private OpenCode server for the Refiner. The checkout is untrusted: the repo's own opencode.json, AGENTS.md,
  * CLAUDE.md, skills and plugins are not loaded, and neither is the user's personal OpenCode config (its MCP servers,
  * plugins and instructions). Provider sign-ins (OpenCode Zen, DeepSeek) still come from OpenCode's data directory.
@@ -59,16 +76,7 @@ export async function startOpencode(configHome: string) {
           description: 'Read-only repository analyst that writes specs',
           prompt: REFINER_PROMPT,
           steps: 40,
-          // Deny by default; "ask" would hang a headless run. The agent works in an export of the commit (see
-          // exportCommit), so everything it can read is committed code, as on GitHub.
-          permission: {
-            '*': 'deny',
-            read: 'allow',
-            list: 'allow',
-            glob: 'allow',
-            grep: 'allow',
-            external_directory: 'deny',
-          },
+          permission: REFINER_PERMISSION,
         },
       },
     },
