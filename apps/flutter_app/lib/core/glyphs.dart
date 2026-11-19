@@ -41,6 +41,9 @@ enum Glyph {
   merged,
   ci,
   close,
+  comment,
+  reply,
+  search,
   run,
 }
 
@@ -386,6 +389,30 @@ Widget _icon(
       interactive: false,
       controller: c,
     ),
+    Glyph.comment => ClipboardPenLineIcon(
+      size: size,
+      color: color,
+      strokeWidth: stroke,
+      animationDuration: d,
+      interactive: false,
+      controller: c,
+    ),
+    Glyph.reply => CornerDownRightIcon(
+      size: size,
+      color: color,
+      strokeWidth: stroke,
+      animationDuration: d,
+      interactive: false,
+      controller: c,
+    ),
+    Glyph.search => SearchIcon(
+      size: size,
+      color: color,
+      strokeWidth: stroke,
+      animationDuration: d,
+      interactive: false,
+      controller: c,
+    ),
     Glyph.run => const SizedBox.shrink(),
   };
 }
@@ -639,9 +666,24 @@ class LifecycleStrip extends StatelessWidget {
   final bool live;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      LayoutBuilder(builder: (context, box) => _strip(context, box.maxWidth));
+
+  Widget _strip(BuildContext context, double width) {
     final t = context.tokens;
     final label = Theme.of(context).textTheme.labelSmall!;
+    final scaler = MediaQuery.textScalerOf(context);
+    double measure(String s) => (TextPainter(
+      text: TextSpan(text: s, style: label),
+      textDirection: TextDirection.ltr,
+      textScaler: scaler,
+      maxLines: 1,
+    )..layout()).width;
+    // Too narrow for every label with an 8px rule between: only the current stage keeps its word.
+    final compact =
+        stages.fold(0.0, (n, s) => n + math.max(24.0, measure(s))) +
+            (stages.length - 1) * 8 >
+        width;
     final children = <Widget>[];
     for (var i = 0; i < stages.length; i++) {
       if (i > 0) {
@@ -688,13 +730,19 @@ class LifecycleStrip extends StatelessWidget {
                   : null,
             ),
             const SizedBox(height: 6),
-            Text(
-              stages[i],
-              style: label.copyWith(color: now ? t.ink : t.muted),
-            ),
+            if (compact && !now)
+              SizedBox(height: label.fontSize! * (label.height ?? 1.2))
+            else
+              Text(
+                stages[i],
+                style: label.copyWith(color: now ? t.ink : t.muted),
+              ),
           ],
         ),
       );
+      if (compact && !now) {
+        children.last = Tooltip(message: stages[i], child: children.last);
+      }
     }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,

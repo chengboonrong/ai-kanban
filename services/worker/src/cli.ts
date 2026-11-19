@@ -1,9 +1,11 @@
 // AI Kanban local worker: reads checkouts on this machine and turns task briefs into specs with OpenCode or Claude Code.
 //
+//   node src/cli.ts setup <code> [--api URL] [--name NAME] [--no-service]   # everything below in one go (connect, checkouts, service)
 //   node src/cli.ts connect <code> [--api http://localhost:8080] [--name "My Mac"]   # the code from the app's Workers page
 //   node src/cli.ts checkouts                                  # pick the repositories this worker may read from Orca's list
 //   node src/cli.ts allow <owner/name> <path-to-checkout>      # or name one by hand
 //   node src/cli.ts start                                      # or: service install | uninstall | status (macOS)
+//   node src/cli.ts mcp                                        # stdio MCP server: approved specs for your coding agent
 import { spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -16,6 +18,7 @@ import { refineWithClaude } from './adapters/claude.ts';
 import { refineInOrca } from './adapters/orca.ts';
 import { type Job, refine, type RunEvent, startOpencode } from './adapters/opencode.ts';
 import { checkCheckout, escapingSymlinks, exportCommit, orcaCheckouts, scrub, snapshot, verifyEvidence } from './repository.ts';
+import { serveMcp } from './mcp.ts';
 import { protectedFolder, service } from './service.ts';
 
 const CONFIG = process.env.AI_KANBAN_WORKER_CONFIG ?? path.join(os.homedir(), '.config', 'ai-kanban', 'worker.json');
@@ -85,6 +88,24 @@ async function connect(args: string[]) {
   console.log(`Connected worker "${body.name}" to ${apiUrl}. Config: ${CONFIG}`);
   if (!same && Object.keys(previous?.repositories ?? {}).length) console.log('Cleared the allowed repositories: the account or API changed');
   if (!same || !Object.keys(previous.repositories).length) console.log('Next: checkouts (or allow <owner/name> <path>), then start');
+}
+
+/** connect, then checkouts, then the background service: what the docs list as three steps. */
+async function setup(args: string[]) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { api: { type: 'string' }, name: { type: 'string' }, 'no-service': { type: 'boolean' } },
+  });
+  if (positionals.length !== 1) throw new Error('usage: setup <code> [--api URL] [--name NAME] [--no-service]');
+  await connect([positionals[0], ...(values.api ? ['--api', values.api] : []), ...(values.name ? ['--name', values.name] : [])]);
+  // checkouts asks per repository, so it needs someone to answer; a script gets the command to run later instead.
+  // Without Orca there is nothing to list; the worker still gets its service, and `allow` adds checkouts later.
+  if (process.stdin.isTTY) await checkouts().catch((e: Error) => console.log(e.message));
+  else console.log('No terminal to ask in; allow each repository with: allow <owner/name> <path-to-checkout>');
+  if (values['no-service']) console.log('Skipped the background service; run `npm start` to start the worker.');
+  else if (process.platform === 'darwin') await service(['install'], CONFIG);
+  else console.log('Run `npm start` under your own service manager.');
 }
 
 const listAllowed = (config: Config) => {
@@ -366,14 +387,16 @@ async function runJob(config: Config, job: Job, ac: AbortController) {
 
 const [command, ...rest] = process.argv.slice(2);
 const commands: Record<string, (args: string[]) => Promise<void>> = {
+  setup,
   connect,
   checkouts,
   allow,
   start,
+  mcp: () => serveMcp({ load, call }), // reads the config on each call, so a later `connect` or `allow` applies at once
   service: (args) => service(args, CONFIG),
 };
 if (!commands[command]) {
-  console.error('usage: cli.ts connect <code> [--api URL] [--name NAME] | checkouts | allow <owner/name> <path> | start | service install|uninstall|status');
+  console.error('usage: cli.ts setup <code> [--api URL] [--name NAME] [--no-service] | connect <code> [--api URL] [--name NAME] | checkouts | allow <owner/name> <path> | start | mcp | service install|uninstall|status');
   process.exit(2);
 }
 await commands[command](rest).catch((e: Error) => {

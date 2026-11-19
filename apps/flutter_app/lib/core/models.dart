@@ -103,6 +103,7 @@ class GitHubIssue {
       number = j['number'],
       url = j['url'],
       issueState = j['issueState'],
+      origin = j['origin'],
       error = j['error'];
 
   /// pending, creating, failed, or created.
@@ -112,6 +113,53 @@ class GitHubIssue {
 
   /// open or closed, once created.
   final String? issueState;
+
+  /// filed (approving the spec created it) or imported (the card was made from it), once created.
+  final String? origin;
+
+  bool get imported => origin == 'imported';
+}
+
+/// The approved spec, posted as one comment on an imported issue.
+class SpecComment {
+  SpecComment.fromJson(Map<String, dynamic> j)
+    : state = j['state'],
+      version = j['version'],
+      url = j['url'],
+      error = j['error'];
+
+  /// pending, posting, posted or failed.
+  final String state;
+
+  /// The spec version it shows, or is about to.
+  final int version;
+
+  /// Set once posted; kept while a newer version replaces it.
+  final String? url;
+
+  /// Why it failed.
+  final String? error;
+
+  bool get busy => state == 'pending' || state == 'posting';
+}
+
+/// An open issue of the board's repository, as the import dialog lists it.
+class RepoIssue {
+  RepoIssue.fromJson(Map<String, dynamic> j)
+    : number = j['number'],
+      title = j['title'],
+      author = j['author'],
+      onBoard = j['onBoard'] == true,
+      taskId = j['taskId'];
+  final int number;
+  final String title;
+  final String? author;
+
+  /// Already a card, on this board or another; only one card per issue.
+  final bool onBoard;
+
+  /// That card, when the viewer can see its board.
+  final String? taskId;
 }
 
 class PullRequest {
@@ -131,18 +179,23 @@ class PullRequest {
   final bool draft;
 }
 
-/// GET /tasks/:id/github: the task's issue and the PRs linked to it.
+/// GET /tasks/:id/github: the task's issue, its spec comment (imported issues), and the PRs linked to it.
 class TaskGitHubDetail {
   TaskGitHubDetail.fromJson(Map<String, dynamic> j)
     : issue = j['issue'] == null ? null : GitHubIssue.fromJson(j['issue']),
+      comment = j['comment'] == null
+          ? null
+          : SpecComment.fromJson(j['comment']),
       prs = [for (final p in j['prs'] ?? const []) PullRequest.fromJson(p)];
   final GitHubIssue? issue;
+  final SpecComment? comment;
   final List<PullRequest> prs;
 
   /// Still changing on GitHub's side, so the task page keeps refreshing.
   bool get active =>
       issue?.state == 'pending' ||
       issue?.issueState == 'open' ||
+      (comment?.busy ?? false) ||
       prs.any((p) => p.state == 'open');
 }
 
@@ -393,6 +446,32 @@ class Spec {
   final bool approved;
   final List<String> requirements, acceptanceCriteria, ambiguities, approach;
   final List<Evidence> evidence;
+}
+
+/// A reviewer's comments on one spec version, sent with "Refine again" for the Refiner to address in the next.
+class SpecFeedback {
+  SpecFeedback(this.specVersion, {this.general, this.items = const []});
+  final int specVersion;
+
+  /// About the spec as a whole.
+  final String? general;
+
+  /// [section] is the spec field (summary, acceptanceCriteria, requirements, ambiguities, approach, evidence) and
+  /// [index] the item's position in it; a comment on an open question is its answer.
+  final List<({String section, int index, String comment})> items;
+
+  /// The general note counts as one, as the API counts it.
+  int get count => items.length + (general == null ? 0 : 1);
+
+  Map<String, dynamic> toJson() => {
+    'specVersion': specVersion,
+    'general': ?general,
+    if (items.isNotEmpty)
+      'items': [
+        for (final i in items)
+          {'section': i.section, 'index': i.index, 'comment': i.comment},
+      ],
+  };
 }
 
 class Refinement {

@@ -28,8 +28,9 @@ Future<void> _open(BuildContext context, String url) async {
   if (uri == null || uri.scheme != 'https') return;
   final opened = await launchUrl(uri).catchError((_) => false);
   if (!opened && context.mounted) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text("Couldn't open $url")));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text("Couldn't open $url")));
   }
 }
 
@@ -268,16 +269,20 @@ class GitHubPanel extends ConsumerWidget {
   const GitHubPanel({super.key, required this.boardId, required this.taskId});
   final String boardId, taskId;
 
-  Future<void> _retry(BuildContext context, WidgetRef ref) =>
-      runWithFeedback(context, () async {
-        try {
-          await ref.read(apiProvider).retryGitHub(taskId);
-        } finally {
-          // Also after a 409: the issue exists, so show it.
-          ref.invalidate(githubProvider(taskId));
-          ref.invalidate(boardProvider(boardId));
-        }
-      });
+  Future<void> _retry(
+    BuildContext context,
+    WidgetRef ref, {
+    bool comment = false,
+  }) => runWithFeedback(context, () async {
+    final api = ref.read(apiProvider);
+    try {
+      await (comment ? api.retryComment(taskId) : api.retryGitHub(taskId));
+    } finally {
+      // Also after a 409: the issue exists, so show it.
+      ref.invalidate(githubProvider(taskId));
+      ref.invalidate(boardProvider(boardId));
+    }
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -372,7 +377,9 @@ class GitHubPanel extends ConsumerWidget {
                                 ? null
                                 : () => _open(context, url),
                             icon: const GlyphIcon(Glyph.open, size: 16),
-                            label: Text('Issue #$number'),
+                            label: Text(
+                              '${issue.imported ? 'Imported from' : 'Issue'} #$number',
+                            ),
                           ),
                           if (issue.issueState case final state?) ...[
                             const SizedBox(width: 8),
@@ -417,6 +424,11 @@ class GitHubPanel extends ConsumerWidget {
                     ),
                   },
                 ),
+                if (gh.comment case final comment?)
+                  _SpecCommentRow(
+                    comment: comment,
+                    onRetry: () => _retry(context, ref, comment: true),
+                  ),
                 for (final pr in gh.prs) _PullRequestTile(pr: pr),
                 if (gh.prs.isEmpty && issue?.state == 'created')
                   Padding(
@@ -432,6 +444,219 @@ class GitHubPanel extends ConsumerWidget {
           },
         ],
       ),
+    );
+  }
+}
+
+/// Where the approved spec stands as a comment on the imported issue.
+class _SpecCommentRow extends StatelessWidget {
+  const _SpecCommentRow({required this.comment, required this.onRetry});
+  final SpecComment comment;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final t = context.tokens;
+    final line = theme.textTheme.bodyMedium!;
+    final v = comment.version;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 48),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(border: Border(bottom: t.hairline)),
+      alignment: Alignment.centerLeft,
+      child: switch (comment) {
+        SpecComment(state: 'posted', :final url?) => TextButton.icon(
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+          ),
+          onPressed: () => _open(context, url),
+          icon: GlyphIcon(Glyph.comment, size: 16, color: t.green),
+          label: Text('Spec v$v posted on the issue'),
+        ),
+        SpecComment(state: 'failed', :final error) => Row(
+          children: [
+            GlyphIcon(
+              Glyph.failed,
+              size: 18,
+              color: t.danger,
+              motion: GlyphMotion.once,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Couldn\'t post spec v$v on the issue', style: line),
+                  Text(error ?? '', style: line.copyWith(color: t.danger)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            FilledButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
+        ),
+        _ => Row(
+          children: [
+            GlyphIcon(
+              Glyph.run,
+              size: 16,
+              color: t.accent,
+              motion: GlyphMotion.loop,
+              semanticLabel: 'Loading',
+            ),
+            const SizedBox(width: 10),
+            Text('Posting spec v$v on the issue…', style: line),
+          ],
+        ),
+      },
+    );
+  }
+}
+
+/// Lets the user pick one of the board repository's open issues to make a card from; returns its number.
+Future<int?> pickIssueToImport(BuildContext context, String boardId) =>
+    showDialog<int>(
+      context: context,
+      builder: (_) => ImportIssueDialog(boardId: boardId),
+    );
+
+/// The repository's open issues, 50 at a time, filtered locally by title or number.
+class ImportIssueDialog extends ConsumerStatefulWidget {
+  const ImportIssueDialog({super.key, required this.boardId});
+  final String boardId;
+
+  @override
+  ConsumerState<ImportIssueDialog> createState() => _ImportIssueDialogState();
+}
+
+class _ImportIssueDialogState extends ConsumerState<ImportIssueDialog> {
+  final _issues = <RepoIssue>[];
+  int _page = 0;
+  bool _more = false, _loading = true;
+  Object? _error;
+  String _filter = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final next = await ref
+          .read(apiProvider)
+          .repoIssues(widget.boardId, page: _page + 1);
+      if (!mounted) return;
+      setState(() {
+        // Sorted by last update: one updated between pages moves up, and the next page repeats one that slid down.
+        final seen = {for (final i in _issues) i.number};
+        _issues.addAll(next.issues.where((i) => seen.add(i.number)));
+        _more = next.more;
+        _page++;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = e);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _next() {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = _issues.where(
+      (i) =>
+          i.title.toLowerCase().contains(_filter) ||
+          '#${i.number}'.contains(_filter),
+    );
+    return AlertDialog(
+      title: const Text('Import a GitHub issue'),
+      content: SizedBox(
+        width: 480,
+        height: 420,
+        child: Column(
+          children: [
+            TextField(
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Filter by title or #number',
+                prefixIcon: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: GlyphIcon(Glyph.search, size: 18),
+                ),
+                isDense: true,
+              ),
+              onChanged: (v) =>
+                  setState(() => _filter = v.trim().toLowerCase()),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final issue in shown)
+                    ListTile(
+                      enabled: !issue.onBoard,
+                      title: Text(issue.title),
+                      subtitle: Text(
+                        '#${issue.number}${issue.author == null ? '' : ' by ${issue.author}'}',
+                      ),
+                      trailing: issue.onBoard
+                          ? const Text('Already a card')
+                          : null,
+                      onTap: () => Navigator.pop(context, issue.number),
+                    ),
+                  if (_error case final error?)
+                    ListTile(
+                      title: Text(errorMessage(error)),
+                      trailing: TextButton(
+                        onPressed: _next,
+                        child: const Text('Try again'),
+                      ),
+                    )
+                  else if (_loading)
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(
+                        child: GlyphIcon(
+                          Glyph.run,
+                          size: 20,
+                          motion: GlyphMotion.loop,
+                          semanticLabel: 'Loading',
+                        ),
+                      ),
+                    )
+                  else if (_more)
+                    TextButton(onPressed: _next, child: const Text('More'))
+                  else if (shown.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        _issues.isEmpty
+                            ? 'No open issues'
+                            : 'No issue matches "$_filter"',
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
     );
   }
 }

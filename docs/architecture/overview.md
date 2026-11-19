@@ -199,6 +199,13 @@ The app never talks to the worker directly: the worker pairs with the API by a o
 5. **Your own workers** — pairing from the app, persistent local worker (launchd), leases, retry rules, worker status, Orca checkout discovery, Claude Code as an optional Refiner. (A remote/cloud worker was dropped: users bind their own machine.)
 6. **Hardening & release** — permissions, read-only enforcement, failure recovery, reconciliation, package signing, tests, end-to-end validation.
 
+Between 5 and 6, after a look at Vibe Kanban (an open-source agent kanban whose company shut it down in April 2026):
+worker setup in one command, an MCP server so coding agents can read approved specs, importing existing GitHub issues
+as cards (approval comments the spec on the issue instead of filing a new one), and comments on individual spec items
+that go back to the Refiner. Deferred on purpose: ACP refiners, because an agent reached over ACP uses its own built-in
+tools and can't be pinned to Read/Glob/Grep the way the worker requires (it refuses any agent that starts with more);
+and an importer for Vibe Kanban exports, which has nobody to serve before a public release.
+
 First usable release: **macOS desktop + web**, with iOS/Android targets kept in the project from day one. Mobile MVP = task capture, spec approval, agent monitoring, PR notifications.
 
 ### MVP acceptance tests

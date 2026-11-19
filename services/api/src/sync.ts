@@ -1,8 +1,8 @@
-import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyReply } from 'fastify';
 import type pg from 'pg';
 import { type Db, httpError, tx } from './db.ts';
-import { type GitHubClient, type GitHubConfig, GitHubError, gitHubClient, validSignature } from './github.ts';
-import { boardFor, logActivity } from './routes.ts';
+import { type GitHubClient, type GitHubConfig, GitHubError, validSignature } from './github.ts';
+import { addTask, boardFor, logActivity } from './routes.ts';
 
 const idParams = { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } as const;
 type Id = { id: string };
@@ -20,11 +20,25 @@ export async function queueIssue(db: Db, taskId: string, repository: string) {
   );
 }
 
+/**
+ * Queues the spec comment on an imported task's issue, for `version`. attempts and the lease stay as they are: attempts
+ * fences every write, and an attempt still in flight keeps its lease, so the next one starts after it and edits (or
+ * adopts) what it posted instead of posting beside it.
+ */
+export async function queueComment(db: Db, taskId: string, version: number) {
+  await db.query(
+    `INSERT INTO github_comments (task_id, version) VALUES ($1, $2)
+     ON CONFLICT (task_id) DO UPDATE SET version = EXCLUDED.version, state = 'pending', next_attempt_at = now(), last_error = NULL,
+       updated_at = now()`,
+    [taskId, version],
+  );
+}
+
 /** The task page's view: unlike the card, the issue says where creation stands (state) apart from GitHub's issueState. */
 async function githubOf(db: Db, taskId: string) {
   const { rows: [row] } = await db.query(
     `SELECT CASE state
-       WHEN 'created' THEN json_build_object('state', 'created', 'number', number, 'url', url, 'issueState', issue_state)
+       WHEN 'created' THEN json_build_object('state', 'created', 'number', number, 'url', url, 'issueState', issue_state, 'origin', origin)
        WHEN 'failed' THEN json_build_object('state', 'failed', 'error', last_error)
        ELSE json_build_object('state', 'pending') END AS issue
      FROM github_issues WHERE task_id = $1`,
@@ -36,10 +50,55 @@ async function githubOf(db: Db, taskId: string) {
      WHERE pt.task_id = $1 ORDER BY p.github_updated_at DESC NULLS LAST, p.number DESC`,
     [taskId],
   );
-  return { issue: row?.issue ?? null, prs };
+  const { rows: [comment] } = await db.query(
+    `SELECT state, version, url, CASE WHEN state = 'failed' THEN last_error END AS error FROM github_comments WHERE task_id = $1`,
+    [taskId],
+  );
+  return { issue: row?.issue ?? null, comment: comment ?? null, prs };
 }
 
-export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool) {
+/** For each issue number already on a card (filed or imported): that card's task id if `userId` can see its board, else null. */
+async function linkedTasks(db: Db, repositoryId: number, numbers: number[], userId: string) {
+  const { rows } = await db.query(
+    `SELECT gi.number, CASE WHEN m.user_id IS NOT NULL THEN gi.task_id END AS "taskId"
+     FROM github_issues gi JOIN tasks t ON t.id = gi.task_id JOIN boards b ON b.id = t.board_id
+     LEFT JOIN workspace_members m ON m.workspace_id = b.workspace_id AND m.user_id = $3
+     WHERE gi.repository_id = $1 AND gi.number = ANY($2::int[])`,
+    [repositoryId, numbers, userId],
+  );
+  return new Map<number, string | null>(rows.map((r) => [r.number, r.taskId]));
+}
+
+async function boardRepository(db: Db, boardId: string): Promise<string> {
+  const { rows: [board] } = await db.query('SELECT repository FROM boards WHERE id = $1', [boardId]);
+  if (!board?.repository) throw httpError(409, 'Connect a repository to this board first');
+  return board.repository;
+}
+
+const notConfigured = (reply: FastifyReply) =>
+  reply.code(503).send({ statusCode: 503, error: 'Service Unavailable', message: 'GitHub sync is not configured' });
+
+/**
+ * A GitHub failure as the answer: its message names a repository or a status, never a credential. Sent rather than
+ * thrown, as the app's error handler hides the message of any 5xx it catches.
+ */
+function gitHubFailed(reply: FastifyReply, e: unknown) {
+  if (!(e instanceof GitHubError)) throw e;
+  const statusCode = e.retryable ? 503 : 502;
+  return reply.code(statusCode).send({ statusCode, error: e.retryable ? 'Service Unavailable' : 'Bad Gateway', message: e.message });
+}
+
+const PER_PAGE = 50;
+const importBody = {
+  type: 'object',
+  required: ['number'],
+  additionalProperties: false,
+  properties: { number: { type: 'integer', minimum: 1, maximum: 2147483647 } },
+} as const;
+/** At most n UTF-16 units, without splitting a surrogate pair. */
+const cap = (s: string, n: number) => s.slice(0, n).replace(/[\uD800-\uDBFF]$/, '');
+
+export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool, gh?: GitHubClient) {
   app.get('/tasks/:id/github', { schema: { params: idParams } }, async (req) => {
     const { id } = req.params as Id;
     await boardFor(pool, req.userId, 'task', id);
@@ -69,6 +128,115 @@ export function registerGitHubRoutes(app: FastifyInstance, pool: pg.Pool) {
     });
     return githubOf(pool, id);
   });
+
+  app.post('/tasks/:id/github/comment/retry', { schema: { params: idParams } }, async (req) => {
+    const { id } = req.params as Id;
+    await boardFor(pool, req.userId, 'task', id);
+    // Only a failed comment is queued again; attempts are kept, as they fence a straggling attempt.
+    const { rowCount } = await pool.query(
+      `UPDATE github_comments SET state = 'pending', next_attempt_at = now(), last_error = NULL, updated_at = now()
+       WHERE task_id = $1 AND state = 'failed'`,
+      [id],
+    );
+    if (!rowCount) {
+      const { rows: [comment] } = await pool.query('SELECT state FROM github_comments WHERE task_id = $1', [id]);
+      if (!comment) throw httpError(409, 'there is no spec comment to post; approve a spec first');
+      if (comment.state === 'posted') throw httpError(409, 'the comment is already posted');
+    }
+    return githubOf(pool, id);
+  });
+
+  // ---- Importing open issues as cards ----
+
+  app.get(
+    '/boards/:id/github/issues',
+    { schema: { params: idParams, querystring: { type: 'object', properties: { page: { type: 'integer', minimum: 1, maximum: 1000, default: 1 } } } } },
+    async (req, reply) => {
+      if (!gh) return notConfigured(reply);
+      const boardId = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
+      const { page } = req.query as { page: number };
+      const repository = await boardRepository(pool, boardId);
+      let repo: { id: number }, listed: Issue[];
+      try {
+        repo = await gh.request<{ id: number }>(repository, 'GET', `/repos/${repository}`);
+        listed = await gh.request<Issue[]>(
+          repository,
+          'GET',
+          `/repos/${repository}/issues?state=open&sort=updated&direction=desc&per_page=${PER_PAGE}&page=${page}`,
+        );
+      } catch (e) {
+        return gitHubFailed(reply, e);
+      }
+      const issues = listed.filter((i) => !i.pull_request); // the issues API lists pull requests too
+      const linked = await linkedTasks(pool, repo.id, issues.map((i) => i.number), req.userId);
+      return {
+        issues: issues.map((i) => ({
+          number: i.number,
+          title: i.title,
+          url: i.html_url,
+          author: i.user?.login ?? null,
+          updatedAt: i.updated_at,
+          onBoard: linked.has(i.number),
+          taskId: linked.get(i.number) ?? null,
+        })),
+        more: listed.length === PER_PAGE, // a full page (pull requests included) may not be the last
+      };
+    },
+  );
+
+  app.post('/boards/:id/github/import', { schema: { params: idParams, body: importBody } }, async (req, reply) => {
+    if (!gh) return notConfigured(reply);
+    const boardId = await boardFor(pool, req.userId, 'board', (req.params as Id).id);
+    const { number } = req.body as { number: number };
+    const repository = await boardRepository(pool, boardId);
+    let repo: { id: number }, issue: Issue | undefined;
+    try {
+      // Reading the repository first surfaces a missing installation, so a 404 below means the issue.
+      repo = await gh.request<{ id: number }>(repository, 'GET', `/repos/${repository}`);
+      issue = await gh.request<Issue>(repository, 'GET', `/repos/${repository}/issues/${number}`).catch((e) => {
+        if (e instanceof GitHubError && (e.status === 404 || e.status === 410)) return undefined; // never existed, or deleted
+        throw e;
+      });
+    } catch (e) {
+      return gitHubFailed(reply, e);
+    }
+    // A transferred issue redirects to its new repository, which isn't this board's.
+    if (!issue?.repository_url?.toLowerCase().endsWith(`/repos/${repository}`)) throw httpError(404, `issue #${number} not found in ${repository}`);
+    if (issue.pull_request) throw httpError(400, `#${number} is a pull request, not an issue`);
+    // An issue this app filed is a card's already; anyone can paste the marker, so only the app's own counts.
+    if (issue.body?.includes(MARKER) && byApp(issue, await gh.app(repository))) {
+      throw httpError(409, `#${number} was filed by AI Kanban; it is already a card`);
+    }
+    const found = issue;
+    const taken = new Error('the issue is already on a board');
+    try {
+      const task = await tx(pool, async (c) => {
+        // The board lock any new card takes; under it the repository must still be the one the issue was read from.
+        const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1 FOR UPDATE', [boardId]);
+        if (!board) throw httpError(404, 'board not found');
+        if (board.repository !== repository) throw httpError(409, `the board now points at ${board.repository ?? 'no repository'}; import again`);
+        // The issue's text is data: it becomes the card's brief and, through it, the Refiner's.
+        const task = await addTask(c, boardId, req.userId, {
+          title: cap(found.title, 500).trim() || `Issue #${number}`,
+          description: cap(found.body ?? '', 20_000),
+        });
+        // One card per issue across every board, filed or imported; a concurrent import of it waits here for the other to end.
+        const { rowCount } = await c.query(
+          `INSERT INTO github_issues (task_id, repository, repository_id, state, origin, number, node_id, url, issue_state, issue_updated_at)
+           VALUES ($1, $2, $3, 'created', 'imported', $4, $5, $6, $7, $8) ON CONFLICT (repository_id, number) DO NOTHING`,
+          [task.id, repository, repo.id, found.number, found.node_id, found.html_url, found.state, found.updated_at],
+        );
+        if (!rowCount) throw taken; // rolls the card back
+        await logActivity(c, task.id, req.userId, 'github_issue_imported', { number: found.number, url: found.html_url });
+        return task;
+      });
+      return reply.code(201).send(task);
+    } catch (e) {
+      if (e !== taken) throw e;
+    }
+    const taskId = (await linkedTasks(pool, repo.id, [number], req.userId)).get(number) ?? null;
+    return reply.code(409).send({ statusCode: 409, error: 'Conflict', message: `#${number} is already on a board`, taskId });
+  });
 }
 
 // ---- Issue body ----
@@ -86,15 +254,18 @@ interface Spec {
 
 const MAX_BODY = 60_000;
 const TRUNCATED = '\n\n_Truncated; the full spec is in AI Kanban._';
-const marker = (taskId: string) => `<!-- ai-kanban:task:${taskId} -->`;
+const MARKER = '<!-- ai-kanban:task:';
+const marker = (taskId: string) => `${MARKER}${taskId} -->`;
+const specMarker = (taskId: string) => `<!-- ai-kanban:spec:${taskId} -->`;
 /** Spec text is data: it must not mention (notify) people or open an HTML comment that hides the rest. */
 // owner/repo#N would also post a cross-reference on another repository's issue.
 const inert = (s: string) => s.replaceAll('@', '@​').replaceAll('<!--', '&lt;!--').replace(/([\w.-]+\/[\w.-]+)#(?=\d)/g, '$1#\u200B');
 const section = (heading: string, lines: string[]) => (lines.length ? `\n\n## ${heading}\n\n${lines.join('\n')}` : '');
 
-export function issueBody(taskId: string, spec: Spec) {
+/** The spec as Markdown after `head`: the marker first (adoption looks for it), then for a comment its heading. */
+export function issueBody(head: string, spec: Spec) {
   const body =
-    `${marker(taskId)}\n\n${inert(spec.summary)}` +
+    `${head}\n\n${inert(spec.summary)}` +
     section('Requirements', spec.requirements.map((r) => `- ${inert(r)}`)) +
     section('Acceptance criteria', spec.acceptanceCriteria.map((a) => `- [ ] ${inert(a)}`)) +
     section('Evidence', spec.evidence.map((e) => `- \`${e.path.replace(/\s+/g, ' ').replaceAll('`', '')}\` lines ${e.startLine}–${e.endLine}: ${inert(e.note)}`)) +
@@ -114,8 +285,7 @@ const backoff = (attempts: number, e: GitHubError) => Math.min(3600, Math.max(60
 const asGitHubError = (e: unknown) => (e instanceof GitHubError ? e : new GitHubError(0, (e as Error).message, true));
 
 /** Starts the background loop; returns stop(). */
-export function startGitHubSync({ pool, github, log }: { pool: pg.Pool; github: GitHubConfig; log: FastifyBaseLogger }) {
-  const gh = gitHubClient(github);
+export function startGitHubSync({ pool, gh, log }: { pool: pg.Pool; gh: GitHubClient; log: FastifyBaseLogger }) {
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
   const tick = async () => {
@@ -129,7 +299,7 @@ export function startGitHubSync({ pool, github, log }: { pool: pg.Pool; github: 
   };
 }
 
-/** One pass: file due issues, reconcile dirty pull requests, prune old delivery ids. */
+/** One pass: file due issues, post due spec comments, reconcile dirty pull requests, prune old delivery ids. */
 export async function syncOnce(pool: pg.Pool, gh: GitHubClient) {
   // A queued issue whose board moved to another repository since approval is never filed.
   await pool.query(
@@ -139,6 +309,7 @@ export async function syncOnce(pool: pg.Pool, gh: GitHubClient) {
        AND b.repository IS DISTINCT FROM gi.repository`,
   );
   for (let job; (job = await claimIssue(pool)); ) await createIssue(pool, gh, job);
+  for (let job; (job = await claimComment(pool)); ) await postComment(pool, gh, job);
   const seen: string[] = []; // each PR once per pass, so a PR that keeps getting bumped can't hold the loop
   for (let pr; (pr = await claimPullRequest(pool, seen)); seen.push(pr.id)) await reconcile(pool, gh, pr);
   await pool.query(`DELETE FROM github_deliveries WHERE received_at < now() - interval '30 days'`);
@@ -165,9 +336,12 @@ type Issue = {
   number: number;
   node_id: string;
   html_url: string;
+  repository_url: string;
   state: 'open' | 'closed';
+  title: string;
   body?: string | null;
   created_at: string;
+  updated_at: string;
   pull_request?: object;
   performed_via_github_app?: { id: number } | null;
   user?: { login: string } | null;
@@ -197,7 +371,7 @@ async function createIssue(pool: pg.Pool, gh: GitHubClient, job: IssueJob) {
       if (!rowCount) return; // someone else claimed it (and adopts or creates), or the board moved (the next pass fails it)
       issue = await gh.request<Issue>(repository, 'POST', `/repos/${repository}/issues`, {
         title: (spec.content as Spec).title,
-        body: issueBody(job.task_id, spec.content),
+        body: issueBody(marker(job.task_id), spec.content),
       });
     }
     const created = issue;
@@ -222,12 +396,16 @@ async function createIssue(pool: pg.Pool, gh: GitHubClient, job: IssueJob) {
   }
 }
 
-function failure(e: GitHubError, repository: string) {
-  if (e.status === 403) return `the GitHub App isn't allowed to create issues in ${repository} (${e.message})`;
-  if (e.status === 410) return `issues are disabled in ${repository}`;
-  if (e.status === 422) return `GitHub rejected the issue (${e.message})`;
+function failure(e: GitHubError, repository: string, what: 'issue' | 'comment' = 'issue') {
+  if (e.status === 403) return `the GitHub App isn't allowed to ${what === 'issue' ? 'create issues' : 'comment on issues'} in ${repository} (${e.message})`;
+  if (e.status === 410) return what === 'issue' ? `issues are disabled in ${repository}` : `the issue was deleted, or issues are disabled in ${repository}`;
+  if (e.status === 422) return `GitHub rejected the ${what} (${e.message})`;
   return e.message;
 }
+
+/** Whether the app created it: GitHub sets performed_via_github_app, or at least the author `<slug>[bot]`. */
+const byApp = (x: Issue | Comment, app: { id: number; slug: string }) =>
+  x.performed_via_github_app?.id === app.id || x.user?.login === `${app.slug}[bot]`;
 
 /** The issue an earlier attempt created: newest first, back to an hour before the row was queued. */
 // ponytail: pages through every issue since then; fine while retries are minutes apart, switch to the search API
@@ -241,10 +419,112 @@ async function findOwnIssue(gh: GitHubClient, job: IssueJob) {
     for (const issue of issues) {
       if (Date.parse(issue.created_at) < since) return undefined;
       // Anyone can paste the marker; only an issue this app created counts.
-      const byApp = issue.performed_via_github_app?.id === app.id || issue.user?.login === `${app.slug}[bot]`;
-      if (!issue.pull_request && issue.body?.includes(marker(job.task_id)) && byApp) return issue;
+      if (!issue.pull_request && issue.body?.includes(marker(job.task_id)) && byApp(issue, app)) return issue;
     }
     if (issues.length < 100) return undefined;
+  }
+}
+
+// An imported issue is someone else's: its approved spec goes on it as one comment, edited when a newer version is
+// approved. The same queue, lease and fence as filing an issue.
+
+type CommentJob = { task_id: string; version: number; comment_id: string | null; attempts: number; created_at: Date; repository: string; number: number };
+
+/** Leases one due comment in a statement of its own, with the issue it goes on. */
+async function claimComment(pool: pg.Pool): Promise<CommentJob | undefined> {
+  const { rows } = await pool.query(
+    `UPDATE github_comments gc SET state = 'posting', attempts = gc.attempts + 1, locked_until = ${LEASE}, updated_at = now()
+     FROM github_issues gi
+     WHERE gi.task_id = gc.task_id AND gc.task_id = (
+       SELECT task_id FROM github_comments
+       WHERE state IN ('pending', 'posting') AND next_attempt_at <= now() AND (locked_until IS NULL OR locked_until < now())
+       ORDER BY next_attempt_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+     RETURNING gc.task_id, gc.version, gc.comment_id, gc.attempts, gc.created_at, gi.repository, gi.number`,
+  );
+  return rows[0];
+}
+
+type Comment = { id: number; html_url: string; body?: string | null; performed_via_github_app?: { id: number } | null; user?: { login: string } | null };
+
+async function postComment(pool: pg.Pool, gh: GitHubClient, job: CommentJob) {
+  const ours = [job.task_id, job.attempts];
+  const { repository } = job; // the imported issue's
+  try {
+    const { rows: [spec] } = await pool.query(
+      `SELECT s.content, s.approved_by, r.repository FROM specs s JOIN agent_runs r ON r.id = s.run_id
+       WHERE s.task_id = $1 AND s.version = $2 AND s.approved_at IS NOT NULL`,
+      [job.task_id, job.version],
+    );
+    if (!spec) throw new GitHubError(0, `spec version ${job.version} isn't approved`, false);
+    // The board may point elsewhere since the import; a spec of another repository doesn't belong on this issue.
+    if (spec.repository !== repository) {
+      throw new GitHubError(0, `spec version ${job.version} describes ${spec.repository}, not ${repository} where the issue is`, false);
+    }
+    const body = issueBody(`${specMarker(job.task_id)}\n\n## AI Kanban spec (version ${job.version})`, spec.content);
+    // An earlier attempt may have posted it and lost the response: look for it before posting another.
+    const found = !job.comment_id && job.attempts > 1 ? await findOwnComment(gh, job) : undefined;
+    let comment = found?.body === body ? found : undefined; // already says what it should
+    if (!comment) {
+      // Renewed just before writing, fenced by attempts, as for issues. A newer version approved meanwhile also stops
+      // this attempt (state is pending again); the next one, once this lease lapses, writes that version.
+      const renew = async () =>
+        (await pool.query(`UPDATE github_comments SET locked_until = ${LEASE} WHERE task_id = $1 AND attempts = $2 AND state = 'posting'`, ours)).rowCount;
+      if (!(await renew())) return;
+      const path = `/repos/${repository}/issues`;
+      const edit = (id: string | number) =>
+        gh.request<Comment>(repository, 'PATCH', `${path}/comments/${id}`, { body }).catch((e) => {
+          if (e instanceof GitHubError && e.status === 404) return undefined; // deleted on GitHub
+          throw e;
+        });
+      const id = job.comment_id ?? found?.id;
+      comment = id ? await edit(id) : undefined;
+      if (id && !comment) {
+        // Someone deleted it. An earlier attempt may have posted it again and lost the answer: adopt that one instead.
+        const again = await findOwnComment(gh, job);
+        if (!(await renew())) return; // the search may have outlasted the lease
+        if (again) comment = await edit(again.id);
+      }
+      comment ??= await gh.request<Comment>(repository, 'POST', `${path}/${job.number}/comments`, { body });
+      // fetch follows a redirect (a transferred issue) and turns the POST into a GET, which answers with something else.
+      if (typeof comment?.id !== 'number') throw new GitHubError(0, "GitHub didn't return the comment; the issue may have been transferred", false);
+    }
+    const posted = comment;
+    await tx(pool, async (c) => {
+      await c.query('SELECT 1 FROM tasks WHERE id = $1 FOR KEY SHARE', [job.task_id]); // lock order of task delete: task first
+      const { rowCount } = await c.query(
+        `UPDATE github_comments SET state = 'posted', comment_id = $3, url = $4, locked_until = NULL, last_error = NULL, updated_at = now()
+         WHERE task_id = $1 AND attempts = $2 AND state = 'posting'`,
+        [...ours, posted.id, posted.html_url],
+      );
+      if (rowCount) await logActivity(c, job.task_id, spec.approved_by, 'github_comment_posted', { version: job.version, url: posted.html_url });
+    });
+  } catch (err) {
+    const e = asGitHubError(err);
+    await pool.query(
+      `UPDATE github_comments SET state = $3, last_error = $4, locked_until = NULL, updated_at = now(),
+         next_attempt_at = now() + make_interval(secs => $5)
+       WHERE task_id = $1 AND attempts = $2 AND state = 'posting'`,
+      [...ours, e.retryable ? 'pending' : 'failed', e.retryable ? e.message : failure(e, repository, 'comment'), backoff(job.attempts, e)],
+    );
+  }
+}
+
+/** The comment an earlier attempt posted: the app's own, carrying the marker, updated since an hour before the row was queued. */
+// ponytail: pages through the issue's comments (oldest first); fine for issues with hundreds of comments.
+async function findOwnComment(gh: GitHubClient, job: CommentJob) {
+  const app = await gh.app(job.repository);
+  const since = new Date(job.created_at.getTime() - 3_600_000).toISOString();
+  for (let page = 1; ; page++) {
+    const comments = await gh.request<Comment[]>(
+      job.repository,
+      'GET',
+      `/repos/${job.repository}/issues/${job.number}/comments?since=${since}&per_page=100&page=${page}`,
+    );
+    for (const comment of comments) {
+      // Anyone can paste the marker; only a comment this app posted counts.
+      if (comment.body?.includes(specMarker(job.task_id)) && byApp(comment, app)) return comment;
+    }
+    if (comments.length < 100) return undefined;
   }
 }
 

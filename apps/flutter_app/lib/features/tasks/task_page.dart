@@ -101,8 +101,9 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
         .updateTask(task.id, title: title, description: _description.text);
     _refresh();
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Saved')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Saved')));
     }
   });
 
@@ -261,6 +262,7 @@ class _TaskEditorState extends ConsumerState<_TaskEditor> {
               boardId: widget.boardId,
               taskId: task.id,
               repository: widget.repository,
+              pinnedBar: true,
             ),
             GitHubPanel(boardId: widget.boardId, taskId: task.id),
             if (!wide) ...[
@@ -399,6 +401,9 @@ class _ActivityList extends StatelessWidget {
     'refinement_failed' => 'saw a refinement fail: ${a.data['error']}',
     'github_issue_created' =>
       'saw GitHub issue${a.data['number'] == null ? '' : ' #${a.data['number']}'} created',
+    'github_issue_imported' => 'imported GitHub issue #${a.data['number']}',
+    'github_comment_posted' =>
+      'saw spec v${a.data['version']} posted on the GitHub issue',
     'moved' => 'moved it from ${a.data['from']} to ${a.data['to']}',
     'updated' => [
       if (a.data['title'] case {'from': final from, 'to': final to})
@@ -416,6 +421,8 @@ class _ActivityList extends StatelessWidget {
     'spec_approved' => (Glyph.approve, t.green, null),
     'refinement_failed' => (Glyph.failed, t.danger, null),
     'github_issue_created' => (Glyph.github, t.ink, null),
+    'github_issue_imported' => (Glyph.github, t.ink, null),
+    'github_comment_posted' => (Glyph.comment, t.green, null),
     'moved' => (Glyph.board, t.idle, t.ink),
     'updated' => (Glyph.edit, t.idle, t.ink),
     _ => (Glyph.activity, t.idle, t.ink),

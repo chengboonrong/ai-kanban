@@ -4,8 +4,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type pg from 'pg';
 import specSchema from '../../../packages/contracts/refined-spec.schema.json' with { type: 'json' };
 import { type Db, httpError, sha256, tx } from './db.ts';
-import { boardFor, enqueueRun, logActivity, REPOSITORY, RUN } from './routes.ts';
-import { queueIssue } from './sync.ts';
+import { boardFor, enqueueRun, type Feedback, logActivity, REPOSITORY, RUN } from './routes.ts';
+import { queueComment, queueIssue } from './sync.ts';
 
 const uuid = { type: 'string', format: 'uuid' } as const;
 const idParams = { type: 'object', required: ['id'], properties: { id: uuid } } as const;
@@ -20,7 +20,56 @@ const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford base32
 /** Uppercase, no separators, and the letters people mistake for digits read as those digits. */
 const normaliseCode = (code: string) => code.toUpperCase().replace(/[-\s]/g, '').replace(/[IL]/g, '1').replace(/O/g, '0');
 
+/**
+ * Each task's newest approved spec version ($1 = the worker's owner), with the content; the caller adds filters
+ * (starting with AND) and `ORDER BY s.task_id, s.version DESC` so DISTINCT ON keeps the newest.
+ */
+const APPROVED_SPECS = `SELECT DISTINCT ON (s.task_id) s.task_id AS "taskId", t.title, b.name AS board, lower(r.repository) AS repository,
+    s.version, s.approved_at AS "approvedAt",
+    CASE WHEN gi.state = 'created' THEN json_build_object('number', gi.number, 'url', gi.url, 'state', gi.issue_state) END AS issue,
+    s.content, s.repository_commit_sha AS "commitSha"
+  FROM specs s
+  JOIN agent_runs r ON r.id = s.run_id -- the repository the spec describes, wherever the board points now
+  JOIN tasks t ON t.id = s.task_id
+  JOIN boards b ON b.id = t.board_id
+  JOIN workspace_members m ON m.workspace_id = b.workspace_id AND m.user_id = $1
+  LEFT JOIN github_issues gi ON gi.task_id = t.id
+  WHERE s.approved_at IS NOT NULL`;
+
 type Id = { id: string };
+
+/** Optional: comments on the latest spec version for the Refiner to address; at least a general note or one item. */
+const runBody = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    feedback: {
+      type: 'object',
+      required: ['specVersion'],
+      additionalProperties: false,
+      anyOf: [{ required: ['general'] }, { required: ['items'] }],
+      properties: {
+        specVersion: { type: 'integer', minimum: 1 },
+        general: { type: 'string', minLength: 1, maxLength: 4000 },
+        items: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: 'object',
+            required: ['section', 'index', 'comment'],
+            additionalProperties: false,
+            properties: {
+              section: { enum: ['summary', 'requirements', 'acceptanceCriteria', 'ambiguities', 'approach', 'evidence'] },
+              index: { type: 'integer', minimum: 0 },
+              comment: { type: 'string', minLength: 1, maxLength: 2000 },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
 
 export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
   // ---- Worker pairing: the signed-in user gets a code, `connect` on their machine trades it for a token ----
@@ -108,19 +157,43 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
   });
 
   // ---- Runs and specs (as the signed-in user) ----
-  app.post('/tasks/:id/runs', { schema: { params: idParams } }, async (req, reply) => {
-    const { id } = req.params as Id;
-    const boardId = await boardFor(pool, req.userId, 'task', id);
-    const { run, created } = await tx(pool, async (c) => {
-      // Locked so the repository can't change before the run is queued for it.
-      const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1 FOR SHARE', [boardId]);
-      if (!board?.repository) throw httpError(409, 'Connect a repository to this board first');
-      return enqueueRun(c, id, req.userId, board.repository);
-    }).catch((e) => {
-      throw e.code === '23503' ? httpError(404, 'task not found') : e; // deleted meanwhile
-    });
-    return reply.code(created ? 201 : 200).send(run);
-  });
+  app.post(
+    '/tasks/:id/runs',
+    {
+      schema: { params: idParams, body: runBody },
+      // A bare POST, as before comments existed, asks for a plain refinement; the schema needs an object to check.
+      preValidation: async (req) => {
+        req.body ??= {};
+      },
+    },
+    async (req, reply) => {
+      const { id } = req.params as Id;
+      const { feedback } = req.body as { feedback?: Feedback };
+      const boardId = await boardFor(pool, req.userId, 'task', id);
+      const { run, created } = await tx(pool, async (c) => {
+        // Locked so the repository can't change before the run is queued for it.
+        const { rows: [board] } = await c.query('SELECT repository FROM boards WHERE id = $1 FOR SHARE', [boardId]);
+        if (!board?.repository) throw httpError(409, 'Connect a repository to this board first');
+        if (feedback) {
+          // Board before task, as approve takes them; the task lock keeps a new version from landing until the run is queued.
+          if (!(await c.query('SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE', [id])).rowCount) throw httpError(404, 'task not found');
+          const { rows: [latest] } = await c.query('SELECT version, content FROM specs WHERE task_id = $1 ORDER BY version DESC LIMIT 1', [id]);
+          if (latest?.version !== feedback.specVersion) throw httpError(409, 'the comments are not on the latest version of this spec');
+          for (const { section, index } of feedback.items ?? []) {
+            const items = section === 'summary' ? 1 : latest.content[section].length;
+            if (index >= items) throw httpError(400, `the spec has no ${section} item ${index}`);
+          }
+        }
+        const queued = await enqueueRun(c, id, req.userId, board.repository, { feedback });
+        // Returning the active run would drop the comments without a word.
+        if (feedback && !queued.created) throw httpError(409, 'a refinement is already running; cancel it first');
+        return queued;
+      }).catch((e) => {
+        throw e.code === '23503' ? httpError(404, 'task not found') : e; // deleted meanwhile
+      });
+      return reply.code(created ? 201 : 200).send(run);
+    },
+  );
 
   app.get('/tasks/:id/refinement', { schema: { params: idParams } }, async (req) => {
     const { id } = req.params as Id;
@@ -191,9 +264,16 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
       if (board.repository !== run.repository) {
         throw httpError(409, `the board now points at ${board.repository ?? 'no repository'}; refine again`);
       }
+      // An imported issue stays in its repository; the spec of another one doesn't belong on it.
+      const { rows: [issue] } = await c.query('SELECT origin, repository FROM github_issues WHERE task_id = $1', [spec.taskId]);
+      if (issue?.origin === 'imported' && issue.repository !== run.repository) {
+        throw httpError(409, `the card's issue is in ${issue.repository}, not ${run.repository}; point the board back and refine again`);
+      }
       const { rows } = await c.query(`UPDATE specs SET approved_by = $2, approved_at = now() WHERE id = $1 RETURNING ${SPEC}`, [id, req.userId]);
       await logActivity(c, spec.taskId, req.userId, 'spec_approved', { version: spec.version });
-      await queueIssue(c, spec.taskId, run.repository);
+      // An imported issue is GitHub's (someone else wrote it): the spec goes on it as a comment, never as a second issue.
+      if (issue?.origin === 'imported') await queueComment(c, spec.taskId, spec.version);
+      else await queueIssue(c, spec.taskId, run.repository);
       return rows[0];
     });
   });
@@ -239,14 +319,49 @@ export function registerRefinementRoutes(app: FastifyInstance, pool: pg.Pool) {
            JOIN workspace_members m ON m.workspace_id = b.workspace_id AND m.user_id = $2
            WHERE r.state = 'queued' AND b.repository_connected_by = $2 AND b.repository = r.repository AND r.repository = ANY($3)
            ORDER BY r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED)
-         RETURNING id, task_id, repository`,
+         RETURNING id, task_id, repository, feedback`,
         [req.workerId, req.userId, repositories, harness],
       );
       if (!run) return reply.code(204).send();
       const { rows: [task] } = await pool.query('SELECT title, description FROM tasks WHERE id = $1', [run.task_id]);
-      return { id: run.id, repository: run.repository, task };
+      if (!run.feedback) return { id: run.id, repository: run.repository, task, feedback: null };
+      // The comments quote items of this version, so the Refiner gets it to revise.
+      const { rows: [previous] } = await pool.query('SELECT content FROM specs WHERE task_id = $1 AND version = $2', [
+        run.task_id,
+        run.feedback.specVersion,
+      ]);
+      return { id: run.id, repository: run.repository, task, feedback: run.feedback, previousSpec: previous?.content };
     },
   );
+
+  // Approved specs for the worker's own coding agent (its MCP server). Scope is the owner's, as for a signed-in call: boards
+  // of workspaces they belong to. Only a person's approval makes a spec readable here; a draft never is.
+  app.get(
+    '/worker/specs',
+    {
+      config: worker,
+      schema: { querystring: { type: 'object', properties: { repository: { type: 'array', maxItems: 200, items: { ...REPOSITORY, type: 'string' } } } } },
+    },
+    async (req) => {
+      const { repository } = req.query as { repository?: string[] };
+      const { rows } = await pool.query(
+        `SELECT "taskId", title, board, repository, version, "approvedAt", issue FROM (${APPROVED_SPECS} ${
+          repository ? 'AND lower(r.repository) = ANY($2)' : ''
+        } ORDER BY s.task_id, s.version DESC) latest ORDER BY "approvedAt" DESC LIMIT 100`,
+        repository ? [req.userId, repository.map((r) => r.toLowerCase())] : [req.userId],
+      );
+      return rows;
+    },
+  );
+
+  app.get('/worker/specs/:taskId', { config: worker, schema: { params: { type: 'object', required: ['taskId'], properties: { taskId: uuid } } } }, async (req) => {
+    const { rows: [found] } = await pool.query(`${APPROVED_SPECS} AND s.task_id = $2 ORDER BY s.task_id, s.version DESC`, [
+      req.userId,
+      (req.params as { taskId: string }).taskId,
+    ]);
+    if (!found) throw httpError(404, 'no approved spec for this task'); // also when it is outside the owner's boards
+    return found;
+  });
 
   app.post(
     '/worker/runs/:id/events',
@@ -423,7 +538,7 @@ export async function expireRun(pool: pg.Pool, runId: string, reason: string, op
     const { rows: [run] } = await c.query(
       `UPDATE agent_runs SET state = 'failed', completed_at = now(), error = $2
        WHERE id = $1 AND state = 'running' AND ($3::uuid IS NULL OR worker_id = $3) AND (NOT $4 OR lease_until < now())
-       RETURNING id, task_id, requested_by, repository, attempt`,
+       RETURNING id, task_id, requested_by, repository, attempt, feedback`,
       [runId, reason, opts.workerId ?? null, opts.lapsed ?? false],
     );
     if (!run) return false;
@@ -438,7 +553,7 @@ export async function expireRun(pool: pg.Pool, runId: string, reason: string, op
 /** Queues the next attempt (true), unless the board moved to another repository since (the run must not read that one) or this was the third. */
 async function retryRun(
   c: pg.PoolClient,
-  run: { id: string; task_id: string; requested_by: string; repository: string; attempt: number },
+  run: { id: string; task_id: string; requested_by: string; repository: string; attempt: number; feedback: Feedback | null },
   boardRepository: string | null,
   reason: string,
 ) {
@@ -447,7 +562,9 @@ async function retryRun(
     await c.query('UPDATE agent_runs SET error = $2 WHERE id = $1', [run.id, `gave up after 3 attempts: ${reason}`]);
     return false;
   }
-  await enqueueRun(c, run.task_id, run.requested_by, run.repository, { attempt: run.attempt + 1, retryReason: reason });
+  // The same comments: the next attempt revises the same version for the same reviewer.
+  const retry = { attempt: run.attempt + 1, retryReason: reason };
+  await enqueueRun(c, run.task_id, run.requested_by, run.repository, { retry, feedback: run.feedback });
   return true;
 }
 

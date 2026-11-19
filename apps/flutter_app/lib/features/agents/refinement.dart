@@ -77,6 +77,67 @@ void _refresh(WidgetRef ref, String boardId, String taskId) {
   ref.invalidate(boardProvider(boardId));
 }
 
+/// A comment's place in a spec: the field and the item's position in it.
+typedef CommentKey = (String section, int index);
+
+/// The general note, kept with the item comments.
+const _general = ('general', 0);
+
+/// The order the spec shows its sections in, which the comments are sent in too.
+const _sections = [
+  'summary',
+  'acceptanceCriteria',
+  'requirements',
+  'ambiguities',
+  'approach',
+  'evidence',
+];
+
+/// Comments on one spec version, written in the spec and sent by the bar's Refine.
+typedef SpecDrafts = ({String? specId, Map<CommentKey, String> comments});
+
+// ponytail: drafts live while the task is on screen, lost on navigation; persist them if people ask.
+class SpecDraftsNotifier extends Notifier<SpecDrafts> {
+  SpecDraftsNotifier(this.taskId);
+  final String taskId;
+
+  @override
+  SpecDrafts build() => (specId: null, comments: const {});
+
+  /// Sets or (with null) removes the comment on [key]. Comments start over with each spec version: they quote its items.
+  void put(Spec spec, CommentKey key, String? text) {
+    final comments = {if (state.specId == spec.id) ...state.comments};
+    text == null ? comments.remove(key) : comments[key] = text;
+    state = (specId: spec.id, comments: comments);
+  }
+
+  void clear() => state = (specId: null, comments: const {});
+}
+
+final specDraftsProvider = NotifierProvider.autoDispose
+    .family<SpecDraftsNotifier, SpecDrafts, String>(SpecDraftsNotifier.new);
+
+/// What Refine sends: null without comments, or once the spec was approved.
+SpecFeedback? _feedback(Spec? spec, SpecDrafts drafts) {
+  if (spec == null || spec.approved || spec.id != drafts.specId) return null;
+  final comments = drafts.comments;
+  final items = comments.keys.where((k) => k != _general).toList()
+    ..sort(
+      (a, b) => a.$1 == b.$1
+          ? a.$2 - b.$2
+          : _sections.indexOf(a.$1) - _sections.indexOf(b.$1),
+    );
+  final feedback = SpecFeedback(
+    spec.version,
+    general: comments[_general],
+    items: [
+      for (final k in items)
+        (section: k.$1, index: k.$2, comment: comments[k]!),
+    ],
+  );
+  return feedback.count == 0 ? null : feedback;
+}
+
 /// The run's lifecycle stages, in order; [_stage] says where a refinement is on it.
 const _stages = ['queued', 'claimed', 'reading', 'spec ready', 'approved'];
 
@@ -92,16 +153,19 @@ int? _stage(AgentRun? run, Spec? spec, RunProgress? progress) {
   return spec.approved ? _stages.length : 3;
 }
 
-/// The task's AI spec: follow a refinement live, then read the result. Its actions live in [RefinementBar].
+/// The task's AI spec: follow a refinement live, then read and comment on the result. Its actions are a
+/// [RefinementBar], drawn at the panel's end unless the page pins one itself ([pinnedBar]).
 class RefinementPanel extends ConsumerWidget {
   const RefinementPanel({
     super.key,
     required this.boardId,
     required this.taskId,
     required this.repository,
+    this.pinnedBar = false,
   });
   final String boardId, taskId;
   final String? repository;
+  final bool pinnedBar;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -164,6 +228,14 @@ class RefinementPanel extends ConsumerWidget {
       _ => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Unpinned, the actions open the panel, as they do the spec on the page.
+          if (!pinnedBar)
+            RefinementBar(
+              boardId: boardId,
+              taskId: taskId,
+              repository: repository,
+              padding: const EdgeInsets.only(bottom: 16),
+            ),
           if (spec == null) heading,
           if (spec != null || active)
             _Screen(run: run, spec: spec, progress: progress),
@@ -209,7 +281,31 @@ class RefinementPanel extends ConsumerWidget {
               ),
             ),
           if (spec != null)
-            _SpecView(spec: spec)
+            _SpecView(
+              spec: spec,
+              open: !spec.approved && !active,
+              drafts: ref.watch(specDraftsProvider(taskId)),
+              onComment: (key, title) async {
+                final drafts = ref.read(specDraftsProvider(taskId));
+                final text = await promptText(
+                  context,
+                  title,
+                  initial: drafts.specId == spec.id
+                      ? drafts.comments[key] ?? ''
+                      : '',
+                  action: 'Add',
+                  maxLength: key == _general ? 4000 : 2000,
+                );
+                if (text != null && context.mounted) {
+                  ref
+                      .read(specDraftsProvider(taskId).notifier)
+                      .put(spec, key, text);
+                }
+              },
+              onRemove: (key) => ref
+                  .read(specDraftsProvider(taskId).notifier)
+                  .put(spec, key, null),
+            )
           else if (run == null)
             _measure(
               Text(
@@ -356,12 +452,18 @@ class RefinementBar extends ConsumerWidget {
     final run = r.run, spec = r.spec;
     final active = run != null && run.active;
     final approvable = spec != null && !spec.approved && !active;
+    final feedback = _feedback(spec, ref.watch(specDraftsProvider(taskId)));
     Future<void> act(Future<void> Function() call) =>
         runWithFeedback(context, () async {
           await call();
           _refresh(ref, boardId, taskId);
         });
-    Future<void> refine() => act(() => api.refine(taskId));
+    Future<void> refine() => act(() async {
+      await api.refine(taskId, feedback: feedback);
+      if (context.mounted) {
+        ref.read(specDraftsProvider(taskId).notifier).clear(); // sent
+      }
+    });
 
     return Container(
       width: double.infinity,
@@ -398,7 +500,11 @@ class RefinementBar extends ConsumerWidget {
             OutlinedButton.icon(
               onPressed: refine,
               icon: const GlyphIcon(Glyph.refine, size: 18),
-              label: const Text('Refine again'),
+              label: Text(switch (feedback?.count) {
+                null => 'Refine again',
+                1 => 'Refine with 1 comment',
+                final n => 'Refine with $n comments',
+              }),
             ),
           if (approvable)
             Text(
@@ -604,8 +710,22 @@ class _LiveRun extends ConsumerWidget {
 
 /// The spec: its title, then sections headed by colour keys, rows on hairlines, then the evidence.
 class _SpecView extends StatelessWidget {
-  const _SpecView({required this.spec});
+  const _SpecView({
+    required this.spec,
+    required this.open,
+    required this.drafts,
+    required this.onComment,
+    required this.onRemove,
+  });
   final Spec spec;
+
+  /// Until it is approved, and unless a newer version is being written, each item takes a comment for the next one.
+  final bool open;
+  final SpecDrafts drafts;
+
+  /// Asks for the comment on a key; the title names the item ("Comment on requirement 2").
+  final void Function(CommentKey key, String title) onComment;
+  final void Function(CommentKey key) onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -620,13 +740,75 @@ class _SpecView extends StatelessWidget {
           padding: const EdgeInsets.only(top: 24, bottom: 4),
           child: KeyHeading(title, glyph: glyph, color: color, ink: ink),
         );
-    Widget row(Widget child) => Container(
+    final comments = drafts.specId == spec.id
+        ? drafts.comments
+        : const <CommentKey, String>{};
+
+    /// [child] at its measure with its comment action at the column edge, and the comment under it once there is one.
+    Widget commentable(Widget child, CommentKey key, String what) {
+      if (!open) return _measure(child);
+      final comment = comments[key];
+      final answer =
+          key.$1 == 'ambiguities'; // a comment on a question answers it
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: _measure(child)),
+              if (answer)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: () => onComment(key, 'Answer $what'),
+                  child: const Text('Answer'),
+                )
+              else
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Comment on $what',
+                  onPressed: () => onComment(key, 'Comment on $what'),
+                  icon: GlyphIcon(Glyph.comment, size: 16, color: t.muted),
+                ),
+            ],
+          ),
+          if (comment != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 4),
+              child: Row(
+                children: [
+                  GlyphIcon(Glyph.reply, size: 14, color: t.blue),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      comment,
+                      style: text.bodyMedium?.copyWith(color: t.ink2),
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Remove comment',
+                    onPressed: () => onRemove(key),
+                    icon: GlyphIcon(Glyph.close, size: 14, color: t.muted),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      );
+    }
+
+    Widget row(Widget child, CommentKey key, String what) => Container(
       padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(border: Border(bottom: t.hairline)),
-      child: _measure(child),
+      child: commentable(child, key, what),
     );
     List<Widget> section(
       String title,
+      String field,
+      String noun,
       Glyph glyph,
       Color color,
       List<String> items, {
@@ -636,7 +818,11 @@ class _SpecView extends StatelessWidget {
       if (items.isNotEmpty) ...[
         heading(title, glyph, color, ink: ink),
         for (final (i, item) in items.indexed)
-          row(_withKeywords('${numbered ? '${i + 1}.' : '•'} $item', prose, t)),
+          row(
+            _withKeywords('${numbered ? '${i + 1}.' : '•'} $item', prose, t),
+            (field, i),
+            '$noun ${i + 1}',
+          ),
       ],
     ];
 
@@ -647,17 +833,31 @@ class _SpecView extends StatelessWidget {
         heading('Summary', Glyph.spec, t.ink),
         Padding(
           padding: const EdgeInsets.only(top: 4),
-          child: _measure(_withKeywords(spec.summary, prose, t)),
+          child: commentable(_withKeywords(spec.summary, prose, t), (
+            'summary',
+            0,
+          ), 'the summary'),
         ),
-        ...section('Requirements', Glyph.edit, t.ink, spec.requirements),
+        ...section(
+          'Requirements',
+          'requirements',
+          'requirement',
+          Glyph.edit,
+          t.ink,
+          spec.requirements,
+        ),
         ...section(
           'Acceptance criteria',
+          'acceptanceCriteria',
+          'acceptance criterion',
           Glyph.check,
           t.green,
           spec.acceptanceCriteria,
         ),
         ...section(
           'Open questions',
+          'ambiguities',
+          'open question',
           Glyph.error,
           t.idle,
           spec.ambiguities,
@@ -665,6 +865,8 @@ class _SpecView extends StatelessWidget {
         ),
         ...section(
           'Suggested approach',
+          'approach',
+          'approach step',
           Glyph.next,
           t.ink,
           spec.approach,
@@ -715,8 +917,22 @@ class _SpecView extends StatelessWidget {
                   ),
                 ],
               ),
+              ('evidence', i),
+              'evidence ${i + 1}',
             ),
         ],
+        if (open)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: row(
+              Text(
+                'Anything else for the next version?',
+                style: text.bodyMedium?.copyWith(color: t.muted),
+              ),
+              _general,
+              'the spec as a whole',
+            ),
+          ),
       ],
     );
   }

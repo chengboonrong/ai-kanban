@@ -66,8 +66,9 @@ All three are one Flutter app with adaptive layouts.
 1. **Capture**: the app saves the task and submits it with an idempotency key, so retries never duplicate a card.
 2. **Refine**: the orchestrator leases a refinement job to a worker of whoever connected the board's repository, on
    their own machine (there is no hosted worker). OpenCode with DeepSeek, or optionally Claude Code, reads a pinned commit and returns a versioned spec with evidence and open questions.
-3. **Approve**: you review the spec, answer its open questions or ask for another pass; approval creates one GitHub
-   issue through the GitHub App.
+3. **Approve**: you review the spec, comment on any of its items (an answer, for an open question) and send the
+   comments back for a revised version, or approve it; approval files one GitHub issue through the GitHub App, or, for
+   a card imported from an issue, posts the spec on that issue as a comment.
 4. **Track**: GitHub webhooks are verified, deduplicated and reconciled; GitHub's review decision and CI status land on
    the card (the app refreshes while issues are queued or open; SSE later).
    Your column choice stays yours, separate from GitHub's status.
@@ -133,11 +134,13 @@ until it resets, or you set paid models in `worker.json`.
 cd services/worker
 npm install
 npm test
-npm run connect -- <code>                       # the code from the app's Workers page; saves ~/.config/ai-kanban/worker.json
-npm run checkouts                               # pick repositories from Orca's list (or: npm run allow -- owner/name ~/code/name)
-npm start                                       # polls the API and refines queued cards
-npm run service -- install                      # or keep it running in the background (macOS LaunchAgent)
+npm run setup -- <code>                         # the code from the app's Workers page: connect, pick checkouts, install the service
 ```
+
+`setup` is three steps you can also run alone: `npm run connect -- <code>` (saves `~/.config/ai-kanban/worker.json`),
+`npm run checkouts` (pick repositories from Orca's list, or `npm run allow -- owner/name ~/code/name`) and
+`npm run service -- install` (macOS LaunchAgent; or `npm start` to run it in a terminal). `npm run mcp` serves approved specs
+to your coding agent over MCP.
 
 Pairing, the background service, the Claude Code option and troubleshooting: [docs/setup/worker.md](docs/setup/worker.md).
 
@@ -159,8 +162,15 @@ Approving a spec queues one GitHub issue, filed by a GitHub App from the spec. P
 or linked in the PR's Development sidebar, which shows with the PR's next update) or whose branch in the repository
 starts with `12-` show on the card and the task page with GitHub's review decision and CI status. Register a development app and a webhook tunnel with
 [docs/setup/github-app.md](docs/setup/github-app.md); without it the API logs `GitHub sync off` and issues stay
-queued. Webhooks arrive on a separate port (8081) so the tunnel exposes nothing else. Until sign-in with GitHub exists,
-keep the API on localhost: anyone who can reach it could file issues in any repository the app is installed on.
+queued. Webhooks arrive on a separate port (8081) so the tunnel exposes nothing else. Until sign-in with GitHub
+checks access, keep the API on localhost: anyone who can reach it could file issues in any repository the app is
+installed on, and also read the open issues of any such repository (and import their bodies) by pointing a board at it.
+
+**Import GitHub issue** (the board's repository menu) lists the repository's open issues and makes a card from the one
+you pick; each issue can be a card on one board only. The card is refined like any other, and approving its spec posts
+the spec as one comment on the issue (approving a later version edits that comment). GitHub keeps owning the issue's
+title and body. Mind that an imported issue's text becomes the Refiner's brief, so anyone who can open issues on the
+repository writes briefs for it; the Refiner stays read-only either way.
 
 To regenerate the screenshots and demo in `docs/media`, keep the API running and run
 `apps/flutter_app/tool/readme_media.sh` (macOS; drives the app with a `demo` account and needs ffmpeg).

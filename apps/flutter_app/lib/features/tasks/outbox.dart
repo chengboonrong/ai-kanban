@@ -34,7 +34,8 @@ class OutboxNotifier extends Notifier<List<Draft>> {
   }
 
   Future<void> _set(List<Draft> drafts) async {
-    state = drafts; // synchronous, so a board refresh and the draft's removal land in the same frame
+    state =
+        drafts; // synchronous, so a board refresh and the draft's removal land in the same frame
     await _store?.write('outbox', [for (final d in drafts) d.toJson()]);
   }
 

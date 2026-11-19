@@ -113,6 +113,8 @@ class BoardNotifier extends AsyncNotifier<Board> {
   Future<void> reload() => _mutate(() async {});
   Future<void> setRepository(String? repository) =>
       _mutate(() => _api.setRepository(boardId, repository));
+  Future<void> importIssue(int number) =>
+      _mutate(() => _api.importIssue(boardId, number));
   Future<void> addColumn(String name) =>
       _mutate(() => _api.addColumn(boardId, name));
   Future<void> renameColumn(String id, String name) =>
@@ -158,6 +160,16 @@ class BoardPage extends ConsumerWidget {
               tooltip: 'Repository',
               icon: const GlyphIcon(Glyph.link),
               onSelected: (choice) async {
+                if (choice == 'import') {
+                  final number = await pickIssueToImport(context, boardId);
+                  if (number != null && context.mounted) {
+                    await runWithFeedback(
+                      context,
+                      () => notifier.importIssue(number),
+                    );
+                  }
+                  return;
+                }
                 if (choice != 'disconnect') return connect();
                 if (await confirm(
                       context,
@@ -180,11 +192,16 @@ class BoardPage extends ConsumerWidget {
                         : 'Change repository…',
                   ),
                 ),
-                if (board.repository != null)
-                  const PopupMenuItem(
+                if (board.repository != null) ...const [
+                  PopupMenuItem(
+                    value: 'import',
+                    child: Text('Import GitHub issue…'),
+                  ),
+                  PopupMenuItem(
                     value: 'disconnect',
                     child: Text('Disconnect repository'),
                   ),
+                ],
               ],
             ),
           IconButton(
@@ -215,7 +232,8 @@ class BoardPage extends ConsumerWidget {
                 if (board.offline)
                   const _Notice(
                     glyph: Glyph.offline,
-                    text: 'Offline: showing the copy saved on this device. New tasks are sent when the connection is back.',
+                    text:
+                        'Offline: showing the copy saved on this device. New tasks are sent when the connection is back.',
                   ),
                 for (final d in drafts.where((d) => d.error != null))
                   _Notice(

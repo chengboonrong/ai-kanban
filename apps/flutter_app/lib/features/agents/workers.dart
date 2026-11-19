@@ -24,12 +24,12 @@ final workersProvider = FutureProvider.autoDispose<List<Worker>>((ref) async {
   }
 });
 
-/// What the user pastes on their machine. Always names the API: without it `connect` reuses the one it saved last.
+/// What the user pastes on their machine (in services/worker). Always names the API: without it `setup` reuses the one it saved last.
 String connectCommand(String code) {
   final api = Uri.base
       .resolve(apiUrl)
       .toString(); // a web build may use a relative base such as /api
-  return "npm run connect -- $code --api '${api.replaceAll("'", r"'\''")}'";
+  return "npm install && npm run setup -- $code --api '${api.replaceAll("'", r"'\''")}'";
 }
 
 String _ago(DateTime t) {
@@ -285,7 +285,8 @@ class PairingDialog extends StatefulWidget {
 }
 
 class _PairingDialogState extends State<PairingDialog> {
-  Timer? _copied; // while set, the copy button says it worked; a SnackBar would sit under the dialog's barrier
+  Timer?
+  _copied; // while set, the copy button says it worked; a SnackBar would sit under the dialog's barrier
 
   @override
   void dispose() {

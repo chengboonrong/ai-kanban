@@ -12,8 +12,9 @@ Future<void> runWithFeedback(
     await action();
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(errorMessage(e))));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(errorMessage(e))));
     }
   }
 }
@@ -23,9 +24,15 @@ Future<String?> promptText(
   String title, {
   String initial = '',
   String action = 'Save',
+  int? maxLength,
 }) => showDialog<String>(
   context: context,
-  builder: (_) => _PromptDialog(title: title, initial: initial, action: action),
+  builder: (_) => _PromptDialog(
+    title: title,
+    initial: initial,
+    action: action,
+    maxLength: maxLength,
+  ),
 );
 
 class _PromptDialog extends StatefulWidget {
@@ -33,8 +40,10 @@ class _PromptDialog extends StatefulWidget {
     required this.title,
     required this.initial,
     required this.action,
+    this.maxLength,
   });
   final String title, initial, action;
+  final int? maxLength;
 
   @override
   State<_PromptDialog> createState() => _PromptDialogState();
@@ -62,6 +71,7 @@ class _PromptDialogState extends State<_PromptDialog> {
       child: TextField(
         controller: _controller,
         autofocus: true,
+        maxLength: widget.maxLength,
         onSubmitted: (_) => _submit(),
       ),
     ),
