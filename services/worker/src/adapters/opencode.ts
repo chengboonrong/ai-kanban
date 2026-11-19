@@ -81,12 +81,53 @@ export async function startOpencode(configHome: string) {
   return { client, server };
 }
 
-export type Job = { id: string; repository: string; task: { title: string; description: string } };
+/** A reviewer's comments on the spec version this run revises; the API checked each item exists in that version. */
+export type Feedback = { specVersion: number; general?: string; items?: { section: string; index: number; comment: string }[] };
+
+export type Job = {
+  id: string;
+  repository: string;
+  task: { title: string; description: string };
+  feedback?: Feedback | null;
+  previousSpec?: Spec; // the version the feedback is about
+};
 
 /** The user prompt both harnesses get. */
 export const brief = (job: Job, commitSha: string) =>
   `Task brief\nTitle: ${job.task.title}\n${job.task.description ? `Description:\n${job.task.description}\n` : ''}
-Repository: ${job.repository} at commit ${commitSha}. Write the spec for this task.`;
+Repository: ${job.repository} at commit ${commitSha}. Write the spec for this task.${
+    job.feedback && job.previousSpec ? revision(job.feedback, job.previousSpec) : ''
+  }`;
+
+const ITEM: Record<string, string> = {
+  requirements: 'requirement',
+  acceptanceCriteria: 'acceptance criterion',
+  ambiguities: 'open question',
+  approach: 'approach step',
+  evidence: 'evidence',
+};
+
+/** The previous version, then each comment quoted against its item, so the model can't mistake which one is meant. */
+function revision(feedback: Feedback, previous: Spec) {
+  const comments = (feedback.items ?? []).map(({ section, index, comment }) => {
+    if (section === 'summary') return `On the summary: ${comment}`;
+    const item = (previous[section] as unknown[])[index];
+    const e = item as Spec['evidence'][number];
+    const what = `${ITEM[section]} ${index + 1} ("${section === 'evidence' ? `${e.path}:${e.startLine}-${e.endLine}` : item}")`;
+    return section === 'ambiguities' ? `Answer to ${what}: ${comment}` : `On ${what}: ${comment}`;
+  });
+  if (feedback.general) comments.push(`In general: ${feedback.general}`);
+  return `
+
+You wrote version ${feedback.specVersion} of this spec before:
+${JSON.stringify(previous, null, 2)}
+
+The person reviewing it commented:
+${comments.map((c) => `- ${c}`).join('\n')}
+
+Write a revised, complete spec that addresses every comment. Keep the parts nobody commented on unless a comment implies
+otherwise, and drop the open questions that were answered from ambiguities.`;
+}
 
 export type RunEvent = { kind: string; data: Record<string, unknown> };
 

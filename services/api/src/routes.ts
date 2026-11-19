@@ -119,26 +119,34 @@ async function loadBoard(db: Db, boardId: string) {
 export const logActivity = (db: Db, taskId: string, actorId: string, kind: string, data: object = {}) =>
   db.query('INSERT INTO task_activity (task_id, actor_id, kind, data) VALUES ($1, $2, $3, $4)', [taskId, actorId, kind, data]);
 
+/** A reviewer's comments on one spec version, for the run that revises it (validated by POST /tasks/:id/runs). */
+export type Feedback = { specVersion: number; general?: string; items?: { section: string; index: number; comment: string }[] };
+
 /** Queues a refinement unless one is already queued or running for the task; returns the active run either way. */
 export async function enqueueRun(
   db: Db,
   taskId: string,
   userId: string,
   repository: string,
-  retry?: { attempt: number; retryReason: string },
+  opts: { retry?: { attempt: number; retryReason: string }; feedback?: Feedback | null } = {},
 ) {
+  const { retry, feedback = null } = opts;
   const { rows } = await db.query(
-    `INSERT INTO agent_runs (task_id, requested_by, repository, attempt, retry_reason) VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO agent_runs (task_id, requested_by, repository, attempt, retry_reason, feedback) VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (task_id) WHERE state IN ('queued', 'running') DO NOTHING RETURNING id`,
-    [taskId, userId, repository, retry?.attempt ?? 1, retry?.retryReason ?? null],
+    [taskId, userId, repository, retry?.attempt ?? 1, retry?.retryReason ?? null, feedback],
   );
   if (rows[0] && retry) await logActivity(db, taskId, userId, 'refinement_retried', { reason: retry.retryReason, attempt: retry.attempt });
-  else if (rows[0]) await logActivity(db, taskId, userId, 'refinement_requested');
+  else if (rows[0]) {
+    // The general note counts as a comment, as the app counts it on the button.
+    const data = feedback ? { comments: (feedback.items?.length ?? 0) + (feedback.general ? 1 : 0) } : {};
+    await logActivity(db, taskId, userId, 'refinement_requested', data);
+  }
   const { rows: [run] } = await db.query(`SELECT ${RUN('$2')} FROM agent_runs WHERE task_id = $1 AND state IN ('queued', 'running')`, [
     taskId,
     userId,
   ]);
-  if (!run) return enqueueRun(db, taskId, userId, repository, retry); // the active run ended in between: queue a new one
+  if (!run) return enqueueRun(db, taskId, userId, repository, opts); // the active run ended in between: queue a new one
   return { run, created: !!rows[0] };
 }
 

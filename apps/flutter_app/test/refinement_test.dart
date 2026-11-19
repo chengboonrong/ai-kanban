@@ -23,6 +23,11 @@ class _FakeApi extends Api {
   final Map<String, dynamic>? boardWaiting;
   ({String state, List<RunEvent> events})? events;
   var refinements = 0;
+  final refined = <SpecFeedback?>[];
+
+  @override
+  Future<void> refine(String taskId, {SpecFeedback? feedback}) async =>
+      refined.add(feedback);
 
   @override
   Future<Refinement> refinement(String taskId) async =>
@@ -381,4 +386,138 @@ void main() {
       );
     });
   }
+
+  group('comments on the spec', () {
+    final spec = {
+      ..._spec,
+      'content': {
+        ...(_spec['content'] as Map<String, dynamic>),
+        'requirements': ['A button'],
+        'acceptanceCriteria': ['Signs in'],
+        'evidence': [
+          {
+            'path': 'lib/settings.dart',
+            'startLine': 1,
+            'endLine': 9,
+            'note': 'Settings page',
+            'verified': true,
+          },
+        ],
+        'ambiguities': ['Which provider?'],
+        'approach': ['Add a route'],
+      },
+    };
+
+    Future<void> comment(
+      WidgetTester tester,
+      Finder action,
+      String text,
+    ) async {
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), text);
+      await tester.tap(find.text('Add'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'are added per item at phone width, removable, and sent in the order the spec shows them',
+      (tester) async {
+        tester.view.physicalSize = const Size(360, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final api = _FakeApi.one({
+          'run': _run('succeeded'),
+          'spec': spec,
+          'waiting': null,
+        });
+        await _pumpPanel(tester, api);
+        expect(find.text('Refine again'), findsOneWidget);
+
+        await comment(
+          tester,
+          find.byTooltip('Comment on requirement 1'),
+          'Also a menu item',
+        );
+        expect(find.text('Also a menu item'), findsOneWidget);
+        expect(find.text('Refine with 1 comment'), findsOneWidget);
+
+        await comment(tester, find.text('Answer'), 'GitHub only');
+        await comment(
+          tester,
+          find.byTooltip('Comment on the summary'),
+          'Say why',
+        );
+        await comment(
+          tester,
+          find.byTooltip('Comment on evidence 1'),
+          'Wrong file',
+        );
+        await comment(
+          tester,
+          find.byTooltip('Comment on the spec as a whole'),
+          'Keep it small',
+        );
+        expect(find.text('Refine with 5 comments'), findsOneWidget);
+
+        final remove = find
+            .byTooltip('Remove comment')
+            .at(1); // the requirement's, under the summary's
+        await tester.ensureVisible(remove);
+        await tester.tap(remove);
+        await tester.pumpAndSettle();
+        expect(find.text('Also a menu item'), findsNothing);
+
+        await tester.ensureVisible(find.text('Refine with 4 comments'));
+        await tester.tap(find.text('Refine with 4 comments'));
+        await tester.pumpAndSettle();
+        expect(api.refined.single!.toJson(), {
+          'specVersion': 2,
+          'general': 'Keep it small',
+          'items': [
+            {'section': 'summary', 'index': 0, 'comment': 'Say why'},
+            {'section': 'ambiguities', 'index': 0, 'comment': 'GitHub only'},
+            {'section': 'evidence', 'index': 0, 'comment': 'Wrong file'},
+          ],
+        });
+        expect(find.text('Refine again'), findsOneWidget, reason: 'sent');
+        expect(find.text('Say why'), findsNothing);
+      },
+    );
+
+    testWidgets('a plain "Refine again" sends none', (tester) async {
+      final api = _FakeApi.one({
+        'run': _run('succeeded'),
+        'spec': spec,
+        'waiting': null,
+      });
+      await _pumpPanel(tester, api);
+      await tester.tap(find.text('Refine again'));
+      await tester.pump();
+      expect(api.refined, [null]);
+    });
+
+    for (final (what, json) in [
+      (
+        'an approved spec',
+        {
+          'run': _run('succeeded'),
+          'spec': {...spec, 'approvedAt': '2026-11-19T00:00:00Z'},
+          'waiting': null,
+        },
+      ),
+      (
+        'a spec a new version is being written for',
+        {'run': _run('running'), 'spec': spec, 'waiting': null},
+      ),
+    ]) {
+      testWidgets('$what takes none', (tester) async {
+        await _pumpPanel(tester, json);
+        expect(find.byTooltip('Comment on requirement 1'), findsNothing);
+        expect(find.text('Answer'), findsNothing);
+        expect(find.text('• Signs in'), findsOneWidget, reason: 'still shown');
+      });
+    }
+  });
 }

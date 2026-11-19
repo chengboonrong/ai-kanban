@@ -142,7 +142,12 @@ class Api {
 
   Future<Refinement> refinement(String taskId) async =>
       Refinement.fromJson((await _dio.get('/tasks/$taskId/refinement')).data);
-  Future<void> refine(String taskId) => _dio.post('/tasks/$taskId/runs');
+
+  /// With [feedback], the next version addresses its comments; 409 once that version is no longer the latest.
+  Future<void> refine(String taskId, {SpecFeedback? feedback}) => _dio.post(
+    '/tasks/$taskId/runs',
+    data: feedback == null ? null : {'feedback': feedback.toJson()},
+  );
   Future<void> cancelRun(String runId) => _dio.post('/runs/$runId/cancel');
   Future<void> approveSpec(String specId) =>
       _dio.post('/specs/$specId/approve');

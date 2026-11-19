@@ -66,8 +66,8 @@ All three are one Flutter app with adaptive layouts.
 1. **Capture**: the app saves the task and submits it with an idempotency key, so retries never duplicate a card.
 2. **Refine**: the orchestrator leases a refinement job to a worker of whoever connected the board's repository, on
    their own machine (there is no hosted worker). OpenCode with DeepSeek, or optionally Claude Code, reads a pinned commit and returns a versioned spec with evidence and open questions.
-3. **Approve**: you review the spec, answer its open questions or ask for another pass; approval creates one GitHub
-   issue through the GitHub App.
+3. **Approve**: you review the spec, comment on any of its items (an answer, for an open question) and send the
+   comments back for a revised version, or approve it; approval creates one GitHub issue through the GitHub App.
 4. **Track**: GitHub webhooks are verified, deduplicated and reconciled; GitHub's review decision and CI status land on
    the card (the app refreshes while issues are queued or open; SSE later).
    Your column choice stays yours, separate from GitHub's status.

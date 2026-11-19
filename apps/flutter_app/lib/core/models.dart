@@ -395,6 +395,32 @@ class Spec {
   final List<Evidence> evidence;
 }
 
+/// A reviewer's comments on one spec version, sent with "Refine again" for the Refiner to address in the next.
+class SpecFeedback {
+  SpecFeedback(this.specVersion, {this.general, this.items = const []});
+  final int specVersion;
+
+  /// About the spec as a whole.
+  final String? general;
+
+  /// [section] is the spec field (summary, acceptanceCriteria, requirements, ambiguities, approach, evidence) and
+  /// [index] the item's position in it; a comment on an open question is its answer.
+  final List<({String section, int index, String comment})> items;
+
+  /// The general note counts as one, as the API counts it.
+  int get count => items.length + (general == null ? 0 : 1);
+
+  Map<String, dynamic> toJson() => {
+    'specVersion': specVersion,
+    'general': ?general,
+    if (items.isNotEmpty)
+      'items': [
+        for (final i in items)
+          {'section': i.section, 'index': i.index, 'comment': i.comment},
+      ],
+  };
+}
+
 class Refinement {
   Refinement.fromJson(Map<String, dynamic> j)
     : run = j['run'] == null ? null : AgentRun.fromJson(j['run']),

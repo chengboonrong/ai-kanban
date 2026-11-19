@@ -26,7 +26,7 @@ import { promisify } from 'node:util';
 import type { OpencodeClient, Part } from '@opencode-ai/sdk/v2';
 import { claudeArgs, parseClaudeLine, refineWithClaude } from '../src/adapters/claude.ts';
 import { refineInOrca } from '../src/adapters/orca.ts';
-import { refine, toolEvent } from '../src/adapters/opencode.ts';
+import { brief, refine, toolEvent } from '../src/adapters/opencode.ts';
 import { checkCheckout, escapingSymlinks, exportCommit, githubCheckouts, scrub, snapshot, verifyEvidence } from '../src/repository.ts';
 import { launchdPlist } from '../src/service.ts';
 
@@ -176,6 +176,48 @@ test('refine takes the answer to its own prompt, however many agent steps it too
   const result = await refine({ client, dir: '/x', job, commitSha: 'abc', models: ['opencode/m'], onEvent: () => {}, signal: new AbortController().signal });
   assert.equal(result.spec, spec);
   assert.equal(polls, 2, 'waited while the session was busy');
+});
+
+test('a brief without comments is the task alone', () => {
+  const job = { id: 'r1', repository: 'acme/web', task: { title: 'Add login', description: 'On settings' }, feedback: null };
+  assert.equal(brief(job, 'abc'), 'Task brief\nTitle: Add login\nDescription:\nOn settings\n\nRepository: acme/web at commit abc. Write the spec for this task.');
+});
+
+test('a brief with comments carries the previous version and quotes each comment against its item', () => {
+  const previousSpec = {
+    title: 'Add login',
+    summary: 'Let people sign in.',
+    requirements: ['A button'],
+    acceptanceCriteria: ['Signs in', 'Shows the name'],
+    evidence: [{ path: 'lib/settings.dart', startLine: 3, endLine: 9, note: 'n', verified: true }],
+    ambiguities: ['Which provider?'],
+    approach: ['Add a route'],
+    readiness: 60,
+  };
+  const feedback = {
+    specVersion: 2,
+    general: 'Keep it small.',
+    items: [
+      { section: 'summary', index: 0, comment: 'Say why.' },
+      { section: 'acceptanceCriteria', index: 1, comment: 'Also the avatar.' },
+      { section: 'ambiguities', index: 0, comment: 'GitHub only.' },
+      { section: 'evidence', index: 0, comment: 'Wrong file.' },
+    ],
+  };
+  const text = brief({ id: 'r1', repository: 'acme/web', task: { title: 'Add login', description: '' }, feedback, previousSpec }, 'abc');
+  assert.ok(text.startsWith('Task brief\nTitle: Add login\n\nRepository: acme/web at commit abc. Write the spec for this task.\n\n'));
+  assert.ok(text.includes(`You wrote version 2 of this spec before:\n${JSON.stringify(previousSpec, null, 2)}\n`));
+  for (const line of [
+    '- On the summary: Say why.',
+    '- On acceptance criterion 2 ("Shows the name"): Also the avatar.',
+    '- Answer to open question 1 ("Which provider?"): GitHub only.',
+    '- On evidence 1 ("lib/settings.dart:3-9"): Wrong file.',
+    '- In general: Keep it small.',
+  ]) {
+    assert.ok(text.includes(`\n${line}\n`), line);
+  }
+  assert.match(text, /addresses every comment/);
+  assert.match(text, /drop the open questions that were answered/);
 });
 
 const fixture = (name: string) => path.join(import.meta.dirname, 'fixtures', name);

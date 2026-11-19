@@ -634,3 +634,97 @@ test('the specs a worker reads can be narrowed by repository, and a stranger nev
   assert.deepEqual((await worker('GET', '/worker/specs')).json(), []);
   assert.equal((await worker('GET', `/worker/specs/${task.id}`)).statusCode, 404);
 });
+
+// ---- Comments on a spec, sent back to the Refiner ----
+
+const feedback = (specVersion: number) => ({
+  specVersion,
+  general: 'Keep it to the settings page.',
+  items: [
+    { section: 'acceptanceCriteria', index: 0, comment: 'Also when GitHub is down' },
+    { section: 'ambiguities', index: 0, comment: 'Yes, sign out disconnects it' },
+  ],
+});
+
+/** A task with spec version 1 written and nothing running. */
+async function specced() {
+  const f = await fixture();
+  const task = (await f.api('POST', `/boards/${f.board.id}/tasks`, { title: 'Add GitHub login' })).json();
+  const run = (await claim(f.worker, f.repository)).json();
+  assert.equal(run.feedback, null, 'a plain run has no comments');
+  assert.equal('previousSpec' in run, false);
+  await f.worker('POST', `/worker/runs/${run.id}/complete`, done());
+  return { ...f, task };
+}
+
+test('comments are stored on the run and handed to the worker with the version they are about', async () => {
+  const { api, task, repository, worker } = await specced();
+  assert.equal((await api('POST', `/tasks/${task.id}/runs`, { feedback: feedback(1) })).statusCode, 201);
+  const requested = (await api('GET', `/tasks/${task.id}`)).json().activity.filter((a: { kind: string }) => a.kind === 'refinement_requested');
+  assert.deepEqual(requested.map((a: { data: object }) => a.data), [{}, { comments: 3 }], 'the general note counts as one');
+
+  const run = (await claim(worker, repository)).json();
+  assert.deepEqual(run.feedback, feedback(1));
+  assert.deepEqual(run.previousSpec, spec());
+  assert.equal((await worker('POST', `/worker/runs/${run.id}/complete`, done(spec('Add GitHub sign-in')))).json().version, 2);
+});
+
+test('comments on a version that is no longer the latest are refused', async () => {
+  const { api, task, repository, worker } = await specced();
+  await api('POST', `/tasks/${task.id}/runs`);
+  await worker('POST', `/worker/runs/${(await claim(worker, repository)).json().id}/complete`, done());
+  const stale = await api('POST', `/tasks/${task.id}/runs`, { feedback: feedback(1) });
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json().message, 'the comments are not on the latest version of this spec');
+  assert.equal((await api('POST', `/tasks/${task.id}/runs`, { feedback: feedback(2) })).statusCode, 201);
+});
+
+test('comments are refused, not dropped, while a refinement is queued or running', async () => {
+  const { api, task, repository, worker } = await specced();
+  await api('POST', `/tasks/${task.id}/runs`);
+  for (const state of ['queued', 'running']) {
+    if (state === 'running') await claim(worker, repository);
+    const res = await api('POST', `/tasks/${task.id}/runs`, { feedback: feedback(1) });
+    assert.equal(res.statusCode, 409, state);
+    assert.equal(res.json().message, 'a refinement is already running; cancel it first');
+  }
+  const { rows } = await pool.query('SELECT feedback FROM agent_runs WHERE task_id = $1', [task.id]);
+  assert.ok(rows.every((r) => r.feedback === null));
+});
+
+test('comments are validated', async () => {
+  const { api, task } = await specced();
+  const one = (section: string, index: number, comment = 'c') => ({ section, index, comment });
+  const items = (...list: object[]) => ({ specVersion: 1, items: list });
+  for (const [body, why] of [
+    [{ specVersion: 1 }, 'neither a general note nor an item'],
+    [items(), 'an empty list'],
+    [{ specVersion: 1, general: '' }, 'an empty note'],
+    [{ specVersion: 1, general: 'x'.repeat(4001) }, 'a long note'],
+    [{ general: 'x' }, 'no version'],
+    [items(one('title', 0)), 'a section that takes no comments'],
+    [items(one('requirements', -1)), 'a negative index'],
+    [items(one('requirements', 0, '')), 'an empty comment'],
+    [items(one('requirements', 0, 'x'.repeat(2001))), 'a long comment'],
+    [items(...Array.from({ length: 51 }, () => one('requirements', 0))), '51 items'],
+    [items(one('requirements', 1)), 'an item the spec does not have'],
+    [items(one('summary', 1)), 'a second summary'],
+  ] as const) {
+    assert.equal((await api('POST', `/tasks/${task.id}/runs`, { feedback: body })).statusCode, 400, why);
+  }
+  assert.equal((await pool.query(`SELECT 1 FROM agent_runs WHERE task_id = $1 AND state = 'queued'`, [task.id])).rowCount, 0);
+  assert.equal((await api('POST', `/tasks/${task.id}/runs`, { feedback: items(one('summary', 0), one('evidence', 0)) })).statusCode, 201);
+});
+
+test('a retried run keeps its comments', async () => {
+  const { api, task, repository, worker } = await specced();
+  await api('POST', `/tasks/${task.id}/runs`, { feedback: feedback(1) });
+  const first = (await claim(worker, repository)).json();
+  await lapse(first.id);
+  await sweepAll();
+  const retry = (await claim(worker, repository)).json();
+  assert.notEqual(retry.id, first.id);
+  assert.equal((await latestRun(api, task.id)).attempt, 2);
+  assert.deepEqual(retry.feedback, feedback(1));
+  assert.deepEqual(retry.previousSpec, spec());
+});
